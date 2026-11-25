@@ -1,0 +1,6 @@
+{
+  "name": "TFC Restaurant",
+  "description": "Single-restaurant food ordering app for TFC Restaurant with menu browsing, cart, delivery and pickup checkout, live order tracking, and role-based manager and admin dashboards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

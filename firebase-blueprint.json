@@ -1,0 +1,258 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Customer or staff user profile",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID" },
+        "displayName": { "type": "string", "description": "Display name" },
+        "email": { "type": "string", "description": "Email address" },
+        "phone": { "type": "string", "description": "Phone number" },
+        "photoUrl": { "type": "string", "description": "Optional avatar URL" },
+        "role": { "type": "string", "enum": ["customer", "manager", "admin"] },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update" }
+      },
+      "required": ["userId", "displayName", "email", "phone", "role", "createdAt", "updatedAt"]
+    },
+    "Manager": {
+      "title": "Manager",
+      "description": "Restaurant manager account and granular permissions",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "active": { "type": "boolean" },
+        "canManageOrders": { "type": "boolean" },
+        "canManageMenu": { "type": "boolean" },
+        "canViewSales": { "type": "boolean" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name", "email", "phone", "active", "canManageOrders", "canManageMenu", "canViewSales", "createdBy", "createdAt", "updatedAt"]
+    },
+    "Admin": {
+      "title": "Admin",
+      "description": "Super Admin account record",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name", "email", "createdAt", "updatedAt"]
+    },
+    "FoodCategory": {
+      "title": "FoodCategory",
+      "description": "TFC menu food category",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "sortOrder": { "type": "integer" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "description", "imageUrl", "sortOrder", "active", "createdAt", "updatedAt"]
+    },
+    "FoodItem": {
+      "title": "FoodItem",
+      "description": "TFC menu food item",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "categoryName": { "type": "string" },
+        "price": { "type": "number" },
+        "discountedPrice": { "type": "number" },
+        "imageUrl": { "type": "string" },
+        "vegType": { "type": "string", "enum": ["VEG", "NON_VEG"] },
+        "available": { "type": "boolean" },
+        "featured": { "type": "boolean" },
+        "popular": { "type": "boolean" },
+        "prepTimeMinutes": { "type": "integer" },
+        "calories": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "description", "categoryId", "categoryName", "price", "imageUrl", "vegType", "available", "featured", "popular", "prepTimeMinutes", "calories", "createdAt", "updatedAt"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Customer food order",
+      "type": "object",
+      "properties": {
+        "orderNumber": { "type": "string" },
+        "userId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerPhone": { "type": "string" },
+        "customerEmail": { "type": "string" },
+        "orderType": { "type": "string", "enum": ["DELIVERY", "PICKUP"] },
+        "status": { "type": "string", "enum": ["Order Placed", "Accepted", "Preparing", "Ready", "Out for Delivery", "Delivered", "Cancelled"] },
+        "items": { "type": "array" },
+        "subtotal": { "type": "number" },
+        "discountAmount": { "type": "number" },
+        "deliveryFee": { "type": "number" },
+        "totalAmount": { "type": "number" },
+        "couponCode": { "type": "string" },
+        "cookingInstructions": { "type": "string" },
+        "deliveryAddress": { "type": "string" },
+        "landmark": { "type": "string" },
+        "deliveryZoneId": { "type": "string" },
+        "deliveryZoneName": { "type": "string" },
+        "deliveryLat": { "type": "number" },
+        "deliveryLng": { "type": "number" },
+        "estimatedMinutes": { "type": "integer" },
+        "paymentMethod": { "type": "string", "enum": ["Cash on Delivery", "Cash at Pickup", "Online Payment"] },
+        "paymentStatus": { "type": "string", "enum": ["Pending", "Paid", "Ready for Integration"] },
+        "rejectionReason": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["orderNumber", "userId", "customerName", "customerPhone", "customerEmail", "orderType", "status", "items", "subtotal", "discountAmount", "deliveryFee", "totalAmount", "estimatedMinutes", "paymentMethod", "paymentStatus", "createdAt", "updatedAt"]
+    },
+    "Address": {
+      "title": "Address",
+      "description": "Saved customer delivery address",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "label": { "type": "string" },
+        "fullAddress": { "type": "string" },
+        "landmark": { "type": "string" },
+        "zoneId": { "type": "string" },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "defaultAddress": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "label", "fullAddress", "landmark", "zoneId", "defaultAddress", "createdAt", "updatedAt"]
+    },
+    "Coupon": {
+      "title": "Coupon",
+      "description": "Promotional coupon or offer",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "discountType": { "type": "string", "enum": ["PERCENT", "FLAT"] },
+        "discountValue": { "type": "number" },
+        "minOrderAmount": { "type": "number" },
+        "maxDiscount": { "type": "number" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "title", "description", "discountType", "discountValue", "minOrderAmount", "maxDiscount", "active", "createdAt", "updatedAt"]
+    },
+    "RestaurantSettings": {
+      "title": "RestaurantSettings",
+      "description": "Global TFC Restaurant configuration",
+      "type": "object",
+      "properties": {
+        "restaurantName": { "type": "string" },
+        "restaurantAddress": { "type": "string" },
+        "pickupInstructions": { "type": "string" },
+        "openingHours": { "type": "string" },
+        "orderingOpen": { "type": "boolean" },
+        "minimumOrderAmount": { "type": "number" },
+        "baseDeliveryFee": { "type": "number" },
+        "estimatedPickupMinutes": { "type": "integer" },
+        "supportPhone": { "type": "string" },
+        "supportEmail": { "type": "string" },
+        "activeBannerTitle": { "type": "string" },
+        "activeBannerSubtitle": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["restaurantName", "restaurantAddress", "pickupInstructions", "openingHours", "orderingOpen", "minimumOrderAmount", "baseDeliveryFee", "estimatedPickupMinutes", "supportPhone", "supportEmail", "activeBannerTitle", "activeBannerSubtitle", "updatedAt"]
+    },
+    "DeliveryZone": {
+      "title": "DeliveryZone",
+      "description": "Delivery zone fee and ETA configuration",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "fee": { "type": "number" },
+        "estimatedMinutes": { "type": "integer" },
+        "minOrderAmount": { "type": "number" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "fee", "estimatedMinutes", "minOrderAmount", "active", "createdAt", "updatedAt"]
+    },
+    "SupportTicket": {
+      "title": "SupportTicket",
+      "description": "Customer support inquiry",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "subject": { "type": "string" },
+        "message": { "type": "string" },
+        "orderNumber": { "type": "string" },
+        "status": { "type": "string", "enum": ["Open", "Resolved"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "userEmail", "subject", "message", "status", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Customer and staff user profiles"
+    },
+    "/managers/{managerId}": {
+      "schema": { "$ref": "#/entities/Manager" },
+      "description": "Manager accounts and permissions managed by Super Admin"
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/Admin" },
+      "description": "Super Admin accounts"
+    },
+    "/food_categories/{categoryId}": {
+      "schema": { "$ref": "#/entities/FoodCategory" },
+      "description": "Restaurant food categories"
+    },
+    "/food_items/{itemId}": {
+      "schema": { "$ref": "#/entities/FoodItem" },
+      "description": "Restaurant food items"
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Customer orders"
+    },
+    "/addresses/{addressId}": {
+      "schema": { "$ref": "#/entities/Address" },
+      "description": "Saved customer delivery addresses"
+    },
+    "/coupons/{couponId}": {
+      "schema": { "$ref": "#/entities/Coupon" },
+      "description": "Discount coupons and offers"
+    },
+    "/restaurant_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/RestaurantSettings" },
+      "description": "Restaurant global settings"
+    },
+    "/delivery_zones/{zoneId}": {
+      "schema": { "$ref": "#/entities/DeliveryZone" },
+      "description": "Delivery zones and fees"
+    },
+    "/support_tickets/{ticketId}": {
+      "schema": { "$ref": "#/entities/SupportTicket" },
+      "description": "Customer support inquiries"
+    }
+  }
+}
