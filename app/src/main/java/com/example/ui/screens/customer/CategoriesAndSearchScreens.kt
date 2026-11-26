@@ -2,9 +2,12 @@ package com.example.ui.screens.customer
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,7 +17,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -32,6 +34,9 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -39,6 +44,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -57,8 +64,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import com.example.data.model.FoodAddon
 import com.example.data.model.FoodCategory
 import com.example.data.model.FoodItem
+import com.example.data.model.FoodVariant
 import com.example.data.model.UiState
 import com.example.data.model.VegType
 import com.example.ui.components.EmptyStateView
@@ -93,7 +102,6 @@ fun CategoryMenuScreen(
         mutableStateOf(initialCategoryId.ifBlank { "ALL" })
     }
     var vegFilter by remember { mutableStateOf<VegType?>(null) }
-    val qtyMap = cartSummary.lines.associate { it.foodItem.id to it.quantity }
 
     Scaffold(
         topBar = {
@@ -133,10 +141,10 @@ fun CategoryMenuScreen(
                         )
                     )
                 }
-                items(categories, key = { it.id }) { cat ->
+                items(categories, key = { it.effectiveId }) { cat ->
                     FilterChip(
-                        selected = selectedCategoryId == cat.id,
-                        onClick = { selectedCategoryId = cat.id },
+                        selected = selectedCategoryId == cat.effectiveId,
+                        onClick = { selectedCategoryId = cat.effectiveId },
                         label = { Text(cat.name) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = TfcCrimson,
@@ -166,9 +174,13 @@ fun CategoryMenuScreen(
                 is UiState.Loading -> LoadingView()
                 is UiState.Error -> ErrorStateView(foodItemsState.message)
                 is UiState.Success -> {
+                    val selectedCatName = categories.firstOrNull { it.effectiveId == selectedCategoryId }?.name
                     val filtered = foodItemsState.data.filter { item ->
-                        (selectedCategoryId == "ALL" || item.categoryId == selectedCategoryId) &&
-                            (vegFilter == null || VegType.fromRaw(item.vegType) == vegFilter)
+                        val catMatch = selectedCategoryId == "ALL" ||
+                            item.categoryId == selectedCategoryId ||
+                            (selectedCatName != null && item.effectiveCategory.equals(selectedCatName, ignoreCase = true))
+                        val vegMatch = vegFilter == null || VegType.fromRaw(item.foodType) == vegFilter
+                        catMatch && vegMatch
                     }
                     if (filtered.isEmpty()) {
                         EmptyStateView(
@@ -180,14 +192,14 @@ fun CategoryMenuScreen(
                             contentPadding = PaddingValues(16.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            items(filtered, key = { it.id }) { item ->
+                            items(filtered, key = { it.effectiveId }) { item ->
                                 FoodItemCard(
                                     item = item,
-                                    cartQuantity = qtyMap[item.id] ?: 0,
-                                    onCardClick = { onOpenFoodDetail(item.id) },
+                                    cartQuantity = cartSummary.quantityForItem(item.effectiveId),
+                                    onCardClick = { onOpenFoodDetail(item.effectiveId) },
                                     onAddClick = { onAddToCart(item) },
-                                    onIncrement = { onIncrement(item.id) },
-                                    onDecrement = { onDecrement(item.id) }
+                                    onIncrement = { onIncrement(item.effectiveId) },
+                                    onDecrement = { onDecrement(item.effectiveId) }
                                 )
                             }
                         }
@@ -214,7 +226,6 @@ fun SearchScreen(
     var vegFilter by remember { mutableStateOf<VegType?>(null) }
 
     val categories = ((categoriesState as? UiState.Success)?.data ?: emptyList()).filter { it.active }
-    val qtyMap = cartSummary.lines.associate { it.foodItem.id to it.quantity }
 
     Column(
         modifier = Modifier
@@ -280,10 +291,10 @@ fun SearchScreen(
                         label = { Text("All Categories") }
                     )
                 }
-                items(categories, key = { it.id }) { cat ->
+                items(categories, key = { it.effectiveId }) { cat ->
                     FilterChip(
-                        selected = selectedCategory == cat.id,
-                        onClick = { selectedCategory = cat.id },
+                        selected = selectedCategory == cat.effectiveId,
+                        onClick = { selectedCategory = cat.effectiveId },
                         label = { Text(cat.name) }
                     )
                 }
@@ -295,14 +306,17 @@ fun SearchScreen(
             is UiState.Error -> ErrorStateView(foodItemsState.message)
             is UiState.Success -> {
                 val q = query.trim().lowercase()
+                val selectedCatName = categories.firstOrNull { it.effectiveId == selectedCategory }?.name
                 val matches = foodItemsState.data.filter { item ->
                     val textOk = q.isEmpty() ||
                         item.name.lowercase().contains(q) ||
                         item.description.lowercase().contains(q) ||
-                        item.categoryName.lowercase().contains(q)
-                    val catOk = selectedCategory == "ALL" || item.categoryId == selectedCategory
+                        item.effectiveCategory.lowercase().contains(q)
+                    val catOk = selectedCategory == "ALL" ||
+                        item.categoryId == selectedCategory ||
+                        (selectedCatName != null && item.effectiveCategory.equals(selectedCatName, ignoreCase = true))
                     val dealOk = !onlyDeals || item.hasDiscount
-                    val vegOk = vegFilter == null || VegType.fromRaw(item.vegType) == vegFilter
+                    val vegOk = vegFilter == null || VegType.fromRaw(item.foodType) == vegFilter
                     textOk && catOk && dealOk && vegOk
                 }
                 if (matches.isEmpty()) {
@@ -315,14 +329,14 @@ fun SearchScreen(
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(matches, key = { it.id }) { item ->
+                        items(matches, key = { it.effectiveId }) { item ->
                             FoodItemCard(
                                 item = item,
-                                cartQuantity = qtyMap[item.id] ?: 0,
-                                onCardClick = { onOpenFoodDetail(item.id) },
+                                cartQuantity = cartSummary.quantityForItem(item.effectiveId),
+                                onCardClick = { onOpenFoodDetail(item.effectiveId) },
                                 onAddClick = { onAddToCart(item) },
-                                onIncrement = { onIncrement(item.id) },
-                                onDecrement = { onDecrement(item.id) }
+                                onIncrement = { onIncrement(item.effectiveId) },
+                                onDecrement = { onDecrement(item.effectiveId) }
                             )
                         }
                     }
@@ -332,18 +346,28 @@ fun SearchScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun FoodDetailScreen(
     itemId: String,
     foodItemsState: UiState<List<FoodItem>>,
     onBack: () -> Unit,
-    onAddToCart: (FoodItem, Int) -> Unit
+    onAddToCart: (FoodItem, Int, FoodVariant?, List<FoodAddon>) -> Unit
 ) {
     BackHandler { onBack() }
 
+    val item = (foodItemsState as? UiState.Success)?.data?.firstOrNull { it.effectiveId == itemId }
     var quantity by remember { mutableIntStateOf(1) }
-    val item = (foodItemsState as? UiState.Success)?.data?.firstOrNull { it.id == itemId }
+    var selectedVariant by remember(item?.effectiveId, item?.variants) {
+        mutableStateOf(item?.variants?.firstOrNull())
+    }
+    var selectedAddons by remember(item?.effectiveId) {
+        mutableStateOf<List<FoodAddon>>(emptyList())
+    }
+
+    val unitPrice = if (item == null) 0.0 else {
+        (selectedVariant?.price ?: item.effectivePrice) + selectedAddons.sumOf { it.price }
+    }
 
     Scaffold(
         topBar = {
@@ -402,10 +426,10 @@ fun FoodDetailScreen(
 
                         Button(
                             onClick = {
-                                onAddToCart(item, quantity)
+                                onAddToCart(item, quantity, selectedVariant, selectedAddons)
                                 onBack()
                             },
-                            enabled = item.available,
+                            enabled = item.isAvailable,
                             shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson),
                             modifier = Modifier
@@ -415,8 +439,8 @@ fun FoodDetailScreen(
                                 .testTag("detail_add_to_cart_button")
                         ) {
                             Text(
-                                text = if (item.available) {
-                                    "Add • ${formatCurrency(item.effectivePrice * quantity)}"
+                                text = if (item.isAvailable) {
+                                    "Add • ${formatCurrency(unitPrice * quantity)}"
                                 } else {
                                     "Currently Out of Stock"
                                 },
@@ -467,14 +491,14 @@ fun FoodDetailScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            VegTypeBadge(item.vegType)
+                            VegTypeBadge(item.foodType)
                             Text(
-                                text = VegType.fromRaw(item.vegType).label,
+                                text = VegType.fromRaw(item.foodType).label,
                                 style = MaterialTheme.typography.labelMedium
                             )
                             Surface(color = TfcSoftRed, shape = RoundedCornerShape(50)) {
                                 Text(
-                                    text = item.categoryName,
+                                    text = item.effectiveCategory,
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         color = TfcCrimson,
                                         fontWeight = FontWeight.Bold
@@ -494,13 +518,13 @@ fun FoodDetailScreen(
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Text(
-                                text = formatCurrency(item.effectivePrice),
+                                text = formatCurrency(unitPrice),
                                 style = MaterialTheme.typography.headlineMedium.copy(
                                     color = TfcCrimson,
                                     fontWeight = FontWeight.ExtraBold
                                 )
                             )
-                            if (item.hasDiscount) {
+                            if (item.hasDiscount && selectedVariant == null) {
                                 Text(
                                     text = formatCurrency(item.price),
                                     style = MaterialTheme.typography.titleMedium.copy(
@@ -539,6 +563,99 @@ fun FoodDetailScreen(
                                         modifier = Modifier.size(18.dp)
                                     )
                                     Text("${item.calories} kcal", style = MaterialTheme.typography.bodyMedium)
+                                }
+                            }
+                        }
+
+                        if (item.variants.isNotEmpty()) {
+                            Text("Choose Portion / Variant", style = MaterialTheme.typography.titleMedium)
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                item.variants.forEach { variant ->
+                                    val isSelected = selectedVariant?.name == variant.name
+                                    Card(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { selectedVariant = variant },
+                                        border = BorderStroke(
+                                            1.5.dp,
+                                            if (isSelected) TfcCrimson else MaterialTheme.colorScheme.outline
+                                        ),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = if (isSelected) TfcSoftRed else MaterialTheme.colorScheme.surface
+                                        )
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                RadioButton(
+                                                    selected = isSelected,
+                                                    onClick = { selectedVariant = variant },
+                                                    colors = RadioButtonDefaults.colors(selectedColor = TfcCrimson)
+                                                )
+                                                Text(variant.name, style = MaterialTheme.typography.bodyLarge)
+                                            }
+                                            Text(
+                                                text = formatCurrency(variant.price),
+                                                style = MaterialTheme.typography.titleSmall.copy(
+                                                    color = TfcCrimson,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (item.addons.isNotEmpty()) {
+                            Text("Extra Ingredients & Add-ons", style = MaterialTheme.typography.titleMedium)
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                item.addons.forEach { addon ->
+                                    val isChecked = selectedAddons.any { it.name == addon.name }
+                                    Card(
+                                        modifier = Modifier.clickable {
+                                            selectedAddons = if (isChecked) {
+                                                selectedAddons.filterNot { it.name == addon.name }
+                                            } else {
+                                                selectedAddons + addon
+                                            }
+                                        },
+                                        border = BorderStroke(
+                                            1.dp,
+                                            if (isChecked) TfcCrimson else MaterialTheme.colorScheme.outline
+                                        ),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = if (isChecked) TfcSoftRed else MaterialTheme.colorScheme.surface
+                                        )
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(end = 12.dp, top = 4.dp, bottom = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Checkbox(
+                                                checked = isChecked,
+                                                onCheckedChange = { checked ->
+                                                    selectedAddons = if (checked) {
+                                                        selectedAddons + addon
+                                                    } else {
+                                                        selectedAddons.filterNot { it.name == addon.name }
+                                                    }
+                                                }
+                                            )
+                                            Text(
+                                                text = "${addon.name} (+${formatCurrency(addon.price)})",
+                                                style = MaterialTheme.typography.bodyMedium
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }

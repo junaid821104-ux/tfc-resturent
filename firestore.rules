@@ -29,28 +29,61 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
-    function isBootstrappedAdmin() {
+    function isVerifiedEmail() {
       return isSignedIn() &&
              'email' in request.auth.token &&
              'email_verified' in request.auth.token &&
-             request.auth.token.email == 'alfianaj2016@gmail.com' &&
+             request.auth.token.email is string &&
+             request.auth.token.email.size() >= 3 &&
              request.auth.token.email_verified == true;
+    }
+
+    function emailDocId() {
+      return isVerifiedEmail()
+        ? request.auth.token.email.lower().replace('[^a-z0-9]', '_')
+        : '_no_email_';
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedEmail() &&
+             request.auth.token.email.lower() == 'junaid545ansrai@gmail.com';
     }
 
     function isAdmin() {
       return isBootstrappedAdmin() ||
-             (isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+             (isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid))) ||
+             (isVerifiedEmail() && exists(/databases/$(database)/documents/admins/$(emailDocId())));
+    }
+
+    function isUidManager() {
+      let uidPath = /databases/$(database)/documents/managers/$(request.auth.uid);
+      return isSignedIn() &&
+             exists(uidPath) &&
+             get(uidPath).data.active == true;
+    }
+
+    function isEmailManager() {
+      let emPath = /databases/$(database)/documents/managers/$(emailDocId());
+      return isVerifiedEmail() &&
+             exists(emPath) &&
+             get(emPath).data.active == true;
     }
 
     function isActiveManager() {
-      return isSignedIn() &&
-             exists(/databases/$(database)/documents/managers/$(request.auth.uid)) &&
-             get(/databases/$(database)/documents/managers/$(request.auth.uid)).data.active == true;
+      return isUidManager() || isEmailManager();
     }
 
     function hasManagerPerm(permField) {
-      return isActiveManager() &&
-             get(/databases/$(database)/documents/managers/$(request.auth.uid)).data[permField] == true;
+      let uidPath = /databases/$(database)/documents/managers/$(request.auth.uid);
+      let emPath = /databases/$(database)/documents/managers/$(emailDocId());
+      return (isSignedIn() &&
+              exists(uidPath) &&
+              get(uidPath).data.active == true &&
+              get(uidPath).data.get(permField, false) == true) ||
+             (isVerifiedEmail() &&
+              exists(emPath) &&
+              get(emPath).data.active == true &&
+              get(emPath).data.get(permField, false) == true);
     }
 
     function isValidTimestamp(ts) {
@@ -60,12 +93,14 @@ service cloud.firestore {
     // --- ENTITY VALIDATORS ---
 
     function isValidUserProfile(data) {
-      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
-             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
-             data.email is string && data.email.size() <= 120 &&
-             data.phone is string && data.phone.size() <= 30 &&
-             (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 500)) &&
-             data.role in ['customer', 'manager', 'admin'] &&
+      return data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
+             data.phoneNumber is string && data.phoneNumber.size() <= 30 &&
+             (data.phoneNumber.size() == 0 || data.phoneNumber.matches('^\\+91[6-9][0-9]{9}$')) &&
+             data.profileImage is string && data.profileImage.size() <= 500 &&
+             data.role in ['customer', 'manager', 'owner'] &&
+             data.isActive is bool &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
     }
@@ -73,10 +108,12 @@ service cloud.firestore {
     function isValidManager(data) {
       return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
              data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
-             data.email is string && data.email.size() <= 120 &&
+             data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
              data.phone is string && data.phone.size() <= 30 &&
              data.active is bool &&
+             (!('canViewOrders' in data) || data.canViewOrders is bool) &&
              data.canManageOrders is bool &&
+             (!('canViewMenu' in data) || data.canViewMenu is bool) &&
              data.canManageMenu is bool &&
              data.canViewSales is bool &&
              data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128 &&
@@ -87,15 +124,17 @@ service cloud.firestore {
     function isValidAdmin(data) {
       return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
              data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
-             data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
+             data.email is string && data.email.size() <= 120 &&
+             (!('phone' in data) || (data.phone is string && data.phone.size() <= 30)) &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
     }
 
     function isValidFoodCategory(data) {
-      return data.name is string && data.name.size() >= 1 && data.name.size() <= 60 &&
+      return (!('id' in data) || (data.id is string && data.id.size() <= 128)) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 60 &&
              data.description is string && data.description.size() <= 200 &&
-             data.imageUrl is string && data.imageUrl.size() <= 500 &&
+             data.imageUrl is string && data.imageUrl.size() <= 250000 &&
              data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 9999 &&
              data.active is bool &&
              isValidTimestamp(data.createdAt) &&
@@ -103,19 +142,22 @@ service cloud.firestore {
     }
 
     function isValidFoodItem(data) {
-      return data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+      return data.id is string && data.id.size() >= 1 && data.id.size() <= 128 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
              data.description is string && data.description.size() <= 500 &&
-             data.categoryId is string && data.categoryId.size() >= 1 && data.categoryId.size() <= 128 &&
-             data.categoryName is string && data.categoryName.size() >= 1 && data.categoryName.size() <= 60 &&
              data.price is number && data.price > 0 && data.price <= 100000 &&
-             (!('discountedPrice' in data) || (data.discountedPrice is number && data.discountedPrice > 0 && data.discountedPrice < data.price)) &&
-             data.imageUrl is string && data.imageUrl.size() <= 500 &&
-             data.vegType in ['VEG', 'NON_VEG'] &&
-             data.available is bool &&
-             data.featured is bool &&
-             data.popular is bool &&
-             data.prepTimeMinutes is int && data.prepTimeMinutes >= 1 && data.prepTimeMinutes <= 240 &&
-             data.calories is int && data.calories >= 0 && data.calories <= 10000 &&
+             (!('discountPrice' in data) || (data.discountPrice is number && data.discountPrice > 0 && data.discountPrice < data.price)) &&
+             data.imageUrl is string && data.imageUrl.size() <= 250000 &&
+             data.category is string && data.category.size() >= 1 && data.category.size() <= 60 &&
+             (!('categoryId' in data) || (data.categoryId is string && data.categoryId.size() <= 128)) &&
+             data.foodType in ['VEG', 'NON_VEG'] &&
+             data.isAvailable is bool &&
+             data.isPopular is bool &&
+             (!('featured' in data) || data.featured is bool) &&
+             (!('prepTimeMinutes' in data) || (data.prepTimeMinutes is int && data.prepTimeMinutes >= 1 && data.prepTimeMinutes <= 240)) &&
+             (!('calories' in data) || (data.calories is int && data.calories >= 0 && data.calories <= 10000)) &&
+             (!('variants' in data) || (data.variants is list && data.variants.size() <= 20)) &&
+             (!('addons' in data) || (data.addons is list && data.addons.size() <= 30)) &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
     }
@@ -187,6 +229,7 @@ service cloud.firestore {
              data.estimatedPickupMinutes is int && data.estimatedPickupMinutes >= 1 && data.estimatedPickupMinutes <= 180 &&
              data.supportPhone is string && data.supportPhone.size() <= 30 &&
              data.supportEmail is string && data.supportEmail.size() <= 120 &&
+             (!('ownerPhone' in data) || (data.ownerPhone is string && data.ownerPhone.size() <= 30)) &&
              data.activeBannerTitle is string && data.activeBannerTitle.size() <= 100 &&
              data.activeBannerSubtitle is string && data.activeBannerSubtitle.size() <= 200 &&
              isValidTimestamp(data.updatedAt);
@@ -215,39 +258,53 @@ service cloud.firestore {
 
     // --- COLLECTION RULES ---
 
+    function isAllowedOwnRole(roleValue) {
+      return roleValue == 'customer' ||
+             (roleValue == 'manager' && isActiveManager()) ||
+             (roleValue == 'owner' && isAdmin());
+    }
+
     match /users/{userId} {
       allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
       allow list: if isAdmin();
       allow create: if isValidId(userId) &&
                        isOwner(userId) &&
-                       incoming().userId == request.auth.uid &&
-                       incoming().role == 'customer' &&
-                       incoming().keys().hasAll(['userId', 'displayName', 'email', 'phone', 'role', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['userId', 'displayName', 'email', 'phone', 'photoUrl', 'role', 'createdAt', 'updatedAt']) &&
+                       incoming().uid == request.auth.uid &&
+                       incoming().isActive == true &&
+                       isAllowedOwnRole(incoming().role) &&
+                       incoming().keys().hasAll(['uid', 'name', 'email', 'phoneNumber', 'profileImage', 'role', 'isActive', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['uid', 'name', 'email', 'phoneNumber', 'profileImage', 'role', 'isActive', 'createdAt', 'updatedAt']) &&
                        isValidUserProfile(incoming());
       allow update: if isValidId(userId) &&
                        isSignedIn() &&
                        isValidUserProfile(incoming()) &&
-                       incoming().userId == existing().userId &&
+                       incoming().uid == existing().get('uid', existing().get('userId', request.auth.uid)) &&
                        incoming().createdAt == existing().createdAt &&
                        (
                          (isOwner(userId) &&
-                          incoming().role == existing().role &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'phone', 'photoUrl', 'updatedAt'])) ||
+                          incoming().isActive == existing().get('isActive', true) &&
+                          (incoming().role == existing().role || isAllowedOwnRole(incoming().role)) &&
+                          (
+                            ('uid' in existing() &&
+                             incoming().email == existing().email &&
+                             incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phoneNumber', 'profileImage', 'role', 'updatedAt'])) ||
+                            (!('uid' in existing()) &&
+                             incoming().diff(existing()).affectedKeys().hasOnly(['uid', 'name', 'email', 'phoneNumber', 'profileImage', 'role', 'isActive', 'updatedAt']))
+                          )) ||
                          (isAdmin() &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'phone', 'photoUrl', 'role', 'updatedAt']))
+                          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'phoneNumber', 'profileImage', 'role', 'isActive', 'updatedAt']))
                        );
       allow delete: if isValidId(userId) && isAdmin();
     }
 
     match /managers/{managerId} {
-      allow get: if isValidId(managerId) && (isOwner(managerId) || isAdmin());
+      allow get: if isValidId(managerId) && (isOwner(managerId) || managerId == emailDocId() || isAdmin());
       allow list: if isAdmin();
       allow create: if isValidId(managerId) &&
                        isAdmin() &&
                        incoming().userId == managerId &&
                        incoming().keys().hasAll(['userId', 'name', 'email', 'phone', 'active', 'canManageOrders', 'canManageMenu', 'canViewSales', 'createdBy', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['userId', 'name', 'email', 'phone', 'active', 'canManageOrders', 'canManageMenu', 'canViewSales', 'createdBy', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'name', 'email', 'phone', 'active', 'canViewOrders', 'canManageOrders', 'canViewMenu', 'canManageMenu', 'canViewSales', 'createdBy', 'createdAt', 'updatedAt']) &&
                        isValidManager(incoming());
       allow update: if isValidId(managerId) &&
                        isAdmin() &&
@@ -255,41 +312,41 @@ service cloud.firestore {
                        incoming().userId == existing().userId &&
                        incoming().createdBy == existing().createdBy &&
                        incoming().createdAt == existing().createdAt &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'phone', 'active', 'canManageOrders', 'canManageMenu', 'canViewSales', 'updatedAt']);
+                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'phone', 'active', 'canViewOrders', 'canManageOrders', 'canViewMenu', 'canManageMenu', 'canViewSales', 'updatedAt']);
       allow delete: if isValidId(managerId) && isAdmin();
     }
 
     match /admins/{adminId} {
-      allow get: if isValidId(adminId) && (isOwner(adminId) || isAdmin());
+      allow get: if isValidId(adminId) && (isOwner(adminId) || adminId == emailDocId() || isAdmin());
       allow list: if isAdmin();
       allow create: if isValidId(adminId) &&
                        isAdmin() &&
                        incoming().userId == adminId &&
                        incoming().keys().hasAll(['userId', 'name', 'email', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['userId', 'name', 'email', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'name', 'email', 'phone', 'createdAt', 'updatedAt']) &&
                        isValidAdmin(incoming());
       allow update: if isValidId(adminId) &&
                        isAdmin() &&
                        isValidAdmin(incoming()) &&
                        incoming().userId == existing().userId &&
                        incoming().createdAt == existing().createdAt &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'updatedAt']);
+                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'phone', 'updatedAt']);
       allow delete: if isValidId(adminId) && isAdmin();
     }
 
-    match /food_categories/{categoryId} {
+    match /categories/{categoryId} {
       allow get: if isValidId(categoryId) && isSignedIn();
       allow list: if isSignedIn();
       allow create: if isValidId(categoryId) &&
                        isAdmin() &&
                        incoming().keys().hasAll(['name', 'description', 'imageUrl', 'sortOrder', 'active', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['name', 'description', 'imageUrl', 'sortOrder', 'active', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['id', 'name', 'description', 'imageUrl', 'sortOrder', 'active', 'createdAt', 'updatedAt']) &&
                        isValidFoodCategory(incoming());
       allow update: if isValidId(categoryId) &&
                        isAdmin() &&
                        isValidFoodCategory(incoming()) &&
                        incoming().createdAt == existing().createdAt &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'imageUrl', 'sortOrder', 'active', 'updatedAt']);
+                       incoming().diff(existing()).affectedKeys().hasOnly(['id', 'name', 'description', 'imageUrl', 'sortOrder', 'active', 'updatedAt']);
       allow delete: if isValidId(categoryId) && isAdmin();
     }
 
@@ -297,22 +354,28 @@ service cloud.firestore {
       allow get: if isValidId(itemId) && isSignedIn();
       allow list: if isSignedIn();
       allow create: if isValidId(itemId) &&
-                       (isAdmin() || hasManagerPerm('canManageMenu')) &&
-                       incoming().keys().hasAll(['name', 'description', 'categoryId', 'categoryName', 'price', 'imageUrl', 'vegType', 'available', 'featured', 'popular', 'prepTimeMinutes', 'calories', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['name', 'description', 'categoryId', 'categoryName', 'price', 'discountedPrice', 'imageUrl', 'vegType', 'available', 'featured', 'popular', 'prepTimeMinutes', 'calories', 'createdAt', 'updatedAt']) &&
+                       isAdmin() &&
+                       incoming().id == itemId &&
+                       incoming().keys().hasAll(['id', 'name', 'description', 'price', 'imageUrl', 'category', 'foodType', 'isAvailable', 'isPopular', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['id', 'name', 'description', 'price', 'discountPrice', 'imageUrl', 'category', 'categoryId', 'foodType', 'isAvailable', 'isPopular', 'featured', 'prepTimeMinutes', 'calories', 'variants', 'addons', 'createdAt', 'updatedAt']) &&
                        isValidFoodItem(incoming());
       allow update: if isValidId(itemId) &&
-                       (isAdmin() || hasManagerPerm('canManageMenu')) &&
                        isValidFoodItem(incoming()) &&
+                       incoming().id == existing().id &&
                        incoming().createdAt == existing().createdAt &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'categoryId', 'categoryName', 'price', 'discountedPrice', 'imageUrl', 'vegType', 'available', 'featured', 'popular', 'prepTimeMinutes', 'calories', 'updatedAt']);
+                       (
+                         (isAdmin() &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'price', 'discountPrice', 'imageUrl', 'category', 'categoryId', 'foodType', 'isAvailable', 'isPopular', 'featured', 'prepTimeMinutes', 'calories', 'variants', 'addons', 'updatedAt'])) ||
+                         (hasManagerPerm('canManageMenu') &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['isAvailable', 'updatedAt']))
+                       );
       allow delete: if isValidId(itemId) && isAdmin();
     }
 
     match /orders/{orderId} {
       allow get: if isValidId(orderId) &&
                     isSignedIn() &&
-                    (existing().userId == request.auth.uid || isAdmin() || hasManagerPerm('canManageOrders') || hasManagerPerm('canViewSales'));
+                    (existing().userId == request.auth.uid || isAdmin() || hasManagerPerm('canViewOrders') || hasManagerPerm('canManageOrders') || hasManagerPerm('canViewSales'));
       allow list: if isSignedIn() &&
                      (resource.data.userId == request.auth.uid || isAdmin() || isActiveManager());
       allow create: if isValidId(orderId) &&
@@ -329,18 +392,15 @@ service cloud.firestore {
                        incoming().userId == existing().userId &&
                        incoming().createdAt == existing().createdAt &&
                        (
-                         // Super Admin override (including terminal state correction)
-                         (isAdmin() &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'paymentStatus', 'estimatedMinutes', 'rejectionReason', 'updatedAt'])) ||
-                         // Manager order status management (blocked once terminal unless admin)
-                         (hasManagerPerm('canManageOrders') &&
-                          !(existing().status in ['Delivered', 'Cancelled']) &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'paymentStatus', 'estimatedMinutes', 'rejectionReason', 'updatedAt'])) ||
-                         // Customer self-cancellation while Order Placed
                          (existing().userId == request.auth.uid &&
                           existing().status == 'Order Placed' &&
                           incoming().status == 'Cancelled' &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+                         (isAdmin() &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'paymentStatus', 'estimatedMinutes', 'rejectionReason', 'updatedAt'])) ||
+                         (!(existing().status in ['Delivered', 'Cancelled']) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'paymentStatus', 'estimatedMinutes', 'rejectionReason', 'updatedAt']) &&
+                          hasManagerPerm('canManageOrders'))
                        );
       allow delete: if isValidId(orderId) && isAdmin();
     }
@@ -386,12 +446,12 @@ service cloud.firestore {
       allow create: if isValidId(settingId) &&
                        isAdmin() &&
                        incoming().keys().hasAll(['restaurantName', 'restaurantAddress', 'pickupInstructions', 'openingHours', 'orderingOpen', 'minimumOrderAmount', 'baseDeliveryFee', 'estimatedPickupMinutes', 'supportPhone', 'supportEmail', 'activeBannerTitle', 'activeBannerSubtitle', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['restaurantName', 'restaurantAddress', 'pickupInstructions', 'openingHours', 'orderingOpen', 'minimumOrderAmount', 'baseDeliveryFee', 'estimatedPickupMinutes', 'supportPhone', 'supportEmail', 'activeBannerTitle', 'activeBannerSubtitle', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['restaurantName', 'restaurantAddress', 'pickupInstructions', 'openingHours', 'orderingOpen', 'minimumOrderAmount', 'baseDeliveryFee', 'estimatedPickupMinutes', 'supportPhone', 'supportEmail', 'ownerPhone', 'activeBannerTitle', 'activeBannerSubtitle', 'updatedAt']) &&
                        isValidRestaurantSettings(incoming());
       allow update: if isValidId(settingId) &&
                        isAdmin() &&
                        isValidRestaurantSettings(incoming()) &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['restaurantName', 'restaurantAddress', 'pickupInstructions', 'openingHours', 'orderingOpen', 'minimumOrderAmount', 'baseDeliveryFee', 'estimatedPickupMinutes', 'supportPhone', 'supportEmail', 'activeBannerTitle', 'activeBannerSubtitle', 'updatedAt']);
+                       incoming().diff(existing()).affectedKeys().hasOnly(['restaurantName', 'restaurantAddress', 'pickupInstructions', 'openingHours', 'orderingOpen', 'minimumOrderAmount', 'baseDeliveryFee', 'estimatedPickupMinutes', 'supportPhone', 'supportEmail', 'ownerPhone', 'activeBannerTitle', 'activeBannerSubtitle', 'updatedAt']);
       allow delete: if isValidId(settingId) && isAdmin();
     }
 

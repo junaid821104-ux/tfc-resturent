@@ -2,23 +2,24 @@
   "entities": {
     "UserProfile": {
       "title": "UserProfile",
-      "description": "Customer or staff user profile",
+      "description": "Customer, manager, or owner user profile created on Google Sign-In",
       "type": "object",
       "properties": {
-        "userId": { "type": "string", "description": "Firebase Auth UID" },
-        "displayName": { "type": "string", "description": "Display name" },
-        "email": { "type": "string", "description": "Email address" },
-        "phone": { "type": "string", "description": "Phone number" },
-        "photoUrl": { "type": "string", "description": "Optional avatar URL" },
-        "role": { "type": "string", "enum": ["customer", "manager", "admin"] },
-        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation" },
-        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update" }
+        "uid": { "type": "string", "description": "Google Firebase Auth UID" },
+        "name": { "type": "string", "description": "Full Name" },
+        "email": { "type": "string", "description": "Google Email address" },
+        "phoneNumber": { "type": "string", "description": "Indian mobile number (+91XXXXXXXXXX)" },
+        "profileImage": { "type": "string", "description": "Google profile photo URL" },
+        "role": { "type": "string", "enum": ["customer", "manager", "owner"] },
+        "isActive": { "type": "boolean", "description": "Account active flag" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["userId", "displayName", "email", "phone", "role", "createdAt", "updatedAt"]
+      "required": ["uid", "name", "email", "phoneNumber", "profileImage", "role", "isActive", "createdAt", "updatedAt"]
     },
     "Manager": {
       "title": "Manager",
-      "description": "Restaurant manager account and granular permissions",
+      "description": "Restaurant manager account authorized by Google email and granular permissions assigned by Restaurant Owner",
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
@@ -26,7 +27,9 @@
         "email": { "type": "string" },
         "phone": { "type": "string" },
         "active": { "type": "boolean" },
+        "canViewOrders": { "type": "boolean" },
         "canManageOrders": { "type": "boolean" },
+        "canViewMenu": { "type": "boolean" },
         "canManageMenu": { "type": "boolean" },
         "canViewSales": { "type": "boolean" },
         "createdBy": { "type": "string" },
@@ -37,12 +40,13 @@
     },
     "Admin": {
       "title": "Admin",
-      "description": "Super Admin account record",
+      "description": "Restaurant Owner / Main Admin account record",
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
         "name": { "type": "string" },
         "email": { "type": "string" },
+        "phone": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -53,6 +57,7 @@
       "description": "TFC menu food category",
       "type": "object",
       "properties": {
+        "id": { "type": "string" },
         "name": { "type": "string" },
         "description": { "type": "string" },
         "imageUrl": { "type": "string" },
@@ -65,26 +70,29 @@
     },
     "FoodItem": {
       "title": "FoodItem",
-      "description": "TFC menu food item",
+      "description": "TFC dynamic menu food item with variants and add-ons",
       "type": "object",
       "properties": {
+        "id": { "type": "string" },
         "name": { "type": "string" },
         "description": { "type": "string" },
-        "categoryId": { "type": "string" },
-        "categoryName": { "type": "string" },
         "price": { "type": "number" },
-        "discountedPrice": { "type": "number" },
+        "discountPrice": { "type": "number" },
         "imageUrl": { "type": "string" },
-        "vegType": { "type": "string", "enum": ["VEG", "NON_VEG"] },
-        "available": { "type": "boolean" },
+        "category": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "foodType": { "type": "string", "enum": ["VEG", "NON_VEG"] },
+        "isAvailable": { "type": "boolean" },
+        "isPopular": { "type": "boolean" },
         "featured": { "type": "boolean" },
-        "popular": { "type": "boolean" },
         "prepTimeMinutes": { "type": "integer" },
         "calories": { "type": "integer" },
+        "variants": { "type": "array" },
+        "addons": { "type": "array" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["name", "description", "categoryId", "categoryName", "price", "imageUrl", "vegType", "available", "featured", "popular", "prepTimeMinutes", "calories", "createdAt", "updatedAt"]
+      "required": ["id", "name", "description", "price", "imageUrl", "category", "foodType", "isAvailable", "isPopular", "createdAt", "updatedAt"]
     },
     "Order": {
       "title": "Order",
@@ -212,23 +220,23 @@
   "firestore": {
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserProfile" },
-      "description": "Customer and staff user profiles"
+      "description": "Customer, manager, and owner user profiles"
     },
     "/managers/{managerId}": {
       "schema": { "$ref": "#/entities/Manager" },
-      "description": "Manager accounts and permissions managed by Super Admin"
+      "description": "Manager accounts and permissions managed by Restaurant Owner"
     },
     "/admins/{adminId}": {
       "schema": { "$ref": "#/entities/Admin" },
-      "description": "Super Admin accounts"
+      "description": "Restaurant Owner / Main Admin accounts"
     },
-    "/food_categories/{categoryId}": {
+    "/categories/{categoryId}": {
       "schema": { "$ref": "#/entities/FoodCategory" },
       "description": "Restaurant food categories"
     },
     "/food_items/{itemId}": {
       "schema": { "$ref": "#/entities/FoodItem" },
-      "description": "Restaurant food items"
+      "description": "Restaurant dynamic food items"
     },
     "/orders/{orderId}": {
       "schema": { "$ref": "#/entities/Order" },

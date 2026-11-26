@@ -100,7 +100,6 @@ fun HomeScreen(
     onDecrement: (String) -> Unit,
     onApplyCoupon: (String) -> Unit
 ) {
-    val qtyMap = cartSummary.lines.associate { it.foodItem.id to it.quantity }
     val savedAddresses = (addressesState as? UiState.Success)?.data ?: emptyList()
     val currentAddress = savedAddresses.firstOrNull { it.id == checkoutDraft.selectedAddressId }
         ?: savedAddresses.firstOrNull { it.defaultAddress }
@@ -392,7 +391,7 @@ fun HomeScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("Food Categories", style = MaterialTheme.typography.titleMedium)
-                        TextButton(onClick = { onOpenCategory(activeCategories.first().id) }) {
+                        TextButton(onClick = { onOpenCategory(activeCategories.first().effectiveId) }) {
                             Text("See All", color = TfcCrimson)
                         }
                     }
@@ -400,10 +399,10 @@ fun HomeScreen(
                         contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        items(activeCategories, key = { it.id }) { cat ->
+                        items(activeCategories, key = { it.effectiveId }) { cat ->
                             FilterChip(
                                 selected = false,
-                                onClick = { onOpenCategory(cat.id) },
+                                onClick = { onOpenCategory(cat.effectiveId) },
                                 label = {
                                     Text(
                                         text = cat.name,
@@ -428,7 +427,7 @@ fun HomeScreen(
                                 ),
                                 modifier = Modifier
                                     .minimumInteractiveComponentSize()
-                                    .testTag("category_chip_${cat.id}")
+                                    .testTag("category_chip_${cat.effectiveId}")
                             )
                         }
                     }
@@ -448,9 +447,9 @@ fun HomeScreen(
                 if (allItems.isEmpty()) {
                     item {
                         EmptyStateView(
-                            title = "TFC Menu Coming Right Up",
-                            subtitle = "Our kitchen menu is stored live in Firebase Firestore. No items have been published yet.",
-                            actionLabel = if (canOpenAdminOrManager) "Open Admin Menu Setup" else null,
+                            title = "No Dishes Published Yet",
+                            subtitle = "Our kitchen menu updates live from TFC Kitchen. Ask the Restaurant Owner to add dishes in the Owner Dashboard.",
+                            actionLabel = if (canOpenAdminOrManager) "Open Owner / Staff Dashboard" else null,
                             onAction = if (canOpenAdminOrManager) onOpenStaffSetup else null
                         )
                     }
@@ -468,11 +467,11 @@ fun HomeScreen(
                                     contentPadding = PaddingValues(horizontal = 16.dp),
                                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
-                                    items(featured, key = { "feat_${it.id}" }) { item ->
+                                    items(featured, key = { "feat_${it.effectiveId}" }) { item ->
                                         FeaturedFoodCard(
                                             item = item,
-                                            cartQuantity = qtyMap[item.id] ?: 0,
-                                            onClick = { onOpenFoodDetail(item.id) },
+                                            cartQuantity = cartSummary.quantityForItem(item.effectiveId),
+                                            onClick = { onOpenFoodDetail(item.effectiveId) },
                                             onAdd = { onAddToCart(item) }
                                         )
                                     }
@@ -481,7 +480,7 @@ fun HomeScreen(
                         }
                     }
 
-                    val popular = allItems.filter { it.popular }
+                    val popular = allItems.filter { it.isPopular }
                     if (popular.isNotEmpty()) {
                         item {
                             Text(
@@ -490,15 +489,15 @@ fun HomeScreen(
                                 modifier = Modifier.padding(horizontal = 16.dp)
                             )
                         }
-                        items(popular, key = { "pop_${it.id}" }) { item ->
+                        items(popular, key = { "pop_${it.effectiveId}" }) { item ->
                             Box(modifier = Modifier.padding(horizontal = 16.dp)) {
                                 FoodItemCard(
                                     item = item,
-                                    cartQuantity = qtyMap[item.id] ?: 0,
-                                    onCardClick = { onOpenFoodDetail(item.id) },
+                                    cartQuantity = cartSummary.quantityForItem(item.effectiveId),
+                                    onCardClick = { onOpenFoodDetail(item.effectiveId) },
                                     onAddClick = { onAddToCart(item) },
-                                    onIncrement = { onIncrement(item.id) },
-                                    onDecrement = { onDecrement(item.id) }
+                                    onIncrement = { onIncrement(item.effectiveId) },
+                                    onDecrement = { onDecrement(item.effectiveId) }
                                 )
                             }
                         }
@@ -511,15 +510,15 @@ fun HomeScreen(
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
                         )
                     }
-                    items(allItems, key = { "all_${it.id}" }) { item ->
+                    items(allItems, key = { "all_${it.effectiveId}" }) { item ->
                         Box(modifier = Modifier.padding(horizontal = 16.dp)) {
                             FoodItemCard(
                                 item = item,
-                                cartQuantity = qtyMap[item.id] ?: 0,
-                                onCardClick = { onOpenFoodDetail(item.id) },
+                                cartQuantity = cartSummary.quantityForItem(item.effectiveId),
+                                onCardClick = { onOpenFoodDetail(item.effectiveId) },
                                 onAddClick = { onAddToCart(item) },
-                                onIncrement = { onIncrement(item.id) },
-                                onDecrement = { onDecrement(item.id) }
+                                onIncrement = { onIncrement(item.effectiveId) },
+                                onDecrement = { onDecrement(item.effectiveId) }
                             )
                         }
                     }
@@ -540,7 +539,7 @@ private fun FeaturedFoodCard(
         modifier = Modifier
             .width(210.dp)
             .clickable(onClick = onClick)
-            .testTag("featured_card_${item.id}"),
+            .testTag("featured_card_${item.effectiveId}"),
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
@@ -582,7 +581,7 @@ private fun FeaturedFoodCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    VegTypeBadge(item.vegType)
+                    VegTypeBadge(item.foodType)
                     Text(
                         text = item.name,
                         style = MaterialTheme.typography.titleSmall,
@@ -615,15 +614,19 @@ private fun FeaturedFoodCard(
                     }
                     Button(
                         onClick = onAdd,
-                        enabled = item.available,
+                        enabled = item.isAvailable,
                         shape = RoundedCornerShape(10.dp),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson),
                         modifier = Modifier.minimumInteractiveComponentSize()
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(15.dp))
-                        Spacer(Modifier.width(3.dp))
-                        Text(if (cartQuantity > 0) "($cartQuantity)" else "Add")
+                        if (item.isAvailable) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(Modifier.width(3.dp))
+                            Text(if (cartQuantity > 0) "($cartQuantity)" else "Add")
+                        } else {
+                            Text("Sold Out", style = MaterialTheme.typography.labelSmall)
+                        }
                     }
                 }
             }

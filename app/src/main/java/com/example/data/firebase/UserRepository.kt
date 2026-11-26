@@ -2,7 +2,9 @@ package com.example.data.firebase
 
 import android.content.Context
 import com.example.R
-import com.example.data.model.AdminAccount
+import com.example.data.model.EmailDocIdHelper
+import com.example.data.model.IndianPhoneValidator
+import com.example.data.model.LoginRole
 import com.example.data.model.ManagerAccount
 import com.example.data.model.SavedAddress
 import com.example.data.model.SupportTicket
@@ -10,6 +12,7 @@ import com.example.data.model.UserProfile
 import com.google.firebase.Firebase
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
@@ -19,8 +22,10 @@ import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 
@@ -35,41 +40,161 @@ class UserRepository(
     )
 
     companion object {
-        const val BOOTSTRAPPED_ADMIN_EMAIL = "alfianaj2016@gmail.com"
+        const val BOOTSTRAPPED_ADMIN_EMAIL = "junaid545ansrai@gmail.com"
     }
 
     private fun requireUserId(): String =
         auth.currentUser?.uid ?: throw IllegalStateException("User must be signed in before accessing user records.")
 
+    private fun currentEmailDocId(): String? {
+        val user = auth.currentUser ?: return null
+        val email = user.email?.trim().orEmpty()
+        if (!user.isEmailVerified || email.isBlank()) return null
+        return EmailDocIdHelper.fromEmail(email)
+    }
+
     fun isBootstrappedSuperAdmin(): Boolean {
         val user = auth.currentUser ?: return false
-        return user.email == BOOTSTRAPPED_ADMIN_EMAIL && user.isEmailVerified
+        return user.email?.trim()?.equals(BOOTSTRAPPED_ADMIN_EMAIL, ignoreCase = true) == true &&
+            user.isEmailVerified
+    }
+
+    private suspend fun isAuthorizedOwner(user: FirebaseUser): Boolean {
+        if (user.email?.trim()?.equals(BOOTSTRAPPED_ADMIN_EMAIL, ignoreCase = true) == true &&
+            user.isEmailVerified
+        ) {
+            return true
+        }
+        val uidExists = db.collection("admins").document(user.uid).get().await().exists()
+        if (uidExists) return true
+        val emailDoc = currentEmailDocId()
+        return emailDoc != null && db.collection("admins").document(emailDoc).get().await().exists()
+    }
+
+    private suspend fun isAuthorizedManager(user: FirebaseUser): Boolean {
+        val uidMgr = db.collection("managers").document(user.uid).get().await()
+            .toObject(ManagerAccount::class.java)
+        if (uidMgr?.active == true) return true
+        val emailDoc = currentEmailDocId() ?: return false
+        val emailMgr = db.collection("managers").document(emailDoc).get().await()
+            .toObject(ManagerAccount::class.java)
+        return emailMgr?.active == true
+    }
+
+    private suspend fun resolveAuthoritativeRole(user: FirebaseUser): LoginRole = when {
+        isAuthorizedOwner(user) -> LoginRole.OWNER
+        isAuthorizedManager(user) -> LoginRole.MANAGER
+        else -> LoginRole.CUSTOMER
     }
 
     suspend fun ensureUserProfile(): Result<Unit> {
         val user = auth.currentUser ?: return Result.failure(IllegalStateException("Not signed in"))
         val docRef = db.collection("users").document(user.uid)
         return try {
+            val resolvedRole = resolveAuthoritativeRole(user)
             val snap = docRef.get().await()
+            val googleName = user.displayName?.trim()?.takeIf { it.isNotBlank() } ?: "TFC User"
+            val googleEmail = user.email?.trim().orEmpty().take(120)
+            val googlePhoto = user.photoUrl?.toString().orEmpty().take(500)
+
             if (!snap.exists()) {
-                val payload = mutableMapOf<String, Any?>(
-                    "userId" to user.uid,
-                    "displayName" to (user.displayName?.takeIf { it.isNotBlank() } ?: "TFC Customer").take(80),
-                    "email" to (user.email ?: "").take(120),
-                    "phone" to (user.phoneNumber ?: "").take(30),
-                    "photoUrl" to user.photoUrl?.toString()?.take(500),
-                    "role" to "customer",
+                val payload = mapOf(
+                    "uid" to user.uid,
+                    "name" to googleName.take(80),
+                    "email" to googleEmail.ifBlank { "${user.uid}@tfc.local" },
+                    "phoneNumber" to "",
+                    "profileImage" to googlePhoto,
+                    "role" to resolvedRole.raw,
+                    "isActive" to true,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
-                @Suppress("UNCHECKED_CAST")
-                docRef.set(payload.filterValues { it != null } as Map<String, Any>).await()
+                docRef.set(payload).await()
+            } else {
+                val hasCanonicalUid = snap.contains("uid")
+                val existingRole = snap.getString("role").orEmpty()
+                if (!hasCanonicalUid) {
+                    val existingName = snap.getString("name")
+                        ?.takeIf { it.isNotBlank() }
+                        ?: snap.getString("displayName")?.takeIf { it.isNotBlank() }
+                        ?: googleName
+                    val existingPhone = snap.getString("phoneNumber")
+                        ?.takeIf { it.isNotBlank() }
+                        ?: snap.getString("phone").orEmpty()
+                    val formattedPhone = IndianPhoneValidator.toE164(existingPhone) ?: ""
+                    val existingImage = snap.getString("profileImage")
+                        ?.takeIf { it.isNotBlank() }
+                        ?: snap.getString("photoUrl").orEmpty()
+                        ?: googlePhoto
+                    docRef.update(
+                        mapOf(
+                            "uid" to user.uid,
+                            "name" to existingName.take(80),
+                            "email" to (snap.getString("email")?.takeIf { it.isNotBlank() } ?: googleEmail).take(120),
+                            "phoneNumber" to formattedPhone.take(30),
+                            "profileImage" to existingImage.take(500),
+                            "role" to resolvedRole.raw,
+                            "isActive" to (snap.getBoolean("isActive") ?: true),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                } else if (existingRole != resolvedRole.raw) {
+                    docRef.update(
+                        mapOf(
+                            "role" to resolvedRole.raw,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                }
             }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.WRITE, docRef.path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun verifyRoleAccess(intendedRole: LoginRole): Result<LoginRole> {
+        val user = auth.currentUser ?: return Result.failure(IllegalStateException("Not signed in"))
+        val emailLabel = user.email?.takeIf { it.isNotBlank() } ?: "This Google account"
+
+        return try {
+            when (intendedRole) {
+                LoginRole.CUSTOMER -> {
+                    ensureUserProfile()
+                    val actual = resolveAuthoritativeRole(user)
+                    Result.success(actual)
+                }
+                LoginRole.MANAGER -> {
+                    if (isAuthorizedManager(user) || isAuthorizedOwner(user)) {
+                        ensureUserProfile()
+                        Result.success(if (isAuthorizedOwner(user)) LoginRole.OWNER else LoginRole.MANAGER)
+                    } else {
+                        Result.failure(
+                            IllegalAccessException(
+                                "$emailLabel is not registered as an active TFC Manager. Ask the Restaurant Owner to add your Google email in Owner Dashboard -> Managers."
+                            )
+                        )
+                    }
+                }
+                LoginRole.OWNER -> {
+                    if (isAuthorizedOwner(user)) {
+                        ensureUserProfile()
+                        Result.success(LoginRole.OWNER)
+                    } else {
+                        Result.failure(
+                            IllegalAccessException(
+                                "$emailLabel is not authorized as the TFC Restaurant Owner."
+                            )
+                        )
+                    }
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             Result.failure(e)
         }
     }
@@ -88,15 +213,19 @@ class UserRepository(
         )
     }
 
-    suspend fun updateUserProfile(displayName: String, phone: String): Result<Unit> {
+    suspend fun updateUserProfile(fullName: String, phoneInput: String): Result<Unit> {
         val uid = requireUserId()
         val docRef = db.collection("users").document(uid)
         return try {
-            require(displayName.trim().length in 1..80) { "Name must be 1–80 characters" }
+            val cleanName = fullName.trim()
+            require(cleanName.length in 1..80) { "Full name must be 1–80 characters" }
+            val normalizedE164 = IndianPhoneValidator.toE164(phoneInput)
+                ?: throw IllegalArgumentException("Enter a valid 10-digit Indian mobile number (+91, starting with 6–9)")
+            ensureUserProfile()
             docRef.update(
                 mapOf(
-                    "displayName" to displayName.trim(),
-                    "phone" to phone.trim().take(30),
+                    "name" to cleanName,
+                    "phoneNumber" to normalizedE164,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
@@ -112,36 +241,51 @@ class UserRepository(
     fun observeMyManagerRecord(userId: String): Flow<ManagerAccount?> = flow {
         val uid = requireUserId()
         check(uid == userId)
-        val docRef = db.collection("managers").document(uid)
+        val uidFlow = db.collection("managers").document(uid)
+            .snapshots()
+            .map { if (it.exists()) it.toObject(ManagerAccount::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) else null }
+            .catch { emit(null) }
+
+        val emailDocId = currentEmailDocId()
+        val emailFlow = if (emailDocId != null && emailDocId != uid) {
+            db.collection("managers").document(emailDocId)
+                .snapshots()
+                .map { if (it.exists()) it.toObject(ManagerAccount::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) else null }
+                .catch { emit(null) }
+        } else {
+            flowOf(null)
+        }
+
         emitAll(
-            docRef.snapshots()
-                .map { snapshot ->
-                    if (snapshot.exists()) {
-                        snapshot.toObject(ManagerAccount::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                    } else null
-                }
-                .catch { error ->
-                    logScopedFlowError(error, uid, OperationType.GET, docRef.path)
-                    throw error
-                }
+            combine(uidFlow, emailFlow) { byUid, byEmail ->
+                listOfNotNull(byUid, byEmail).firstOrNull { it.active } ?: byUid ?: byEmail
+            }
         )
     }
 
-    fun observeMyAdminRecord(userId: String): Flow<AdminAccount?> = flow {
+    fun observeIsOwner(userId: String): Flow<Boolean> = flow {
         val uid = requireUserId()
         check(uid == userId)
-        val docRef = db.collection("admins").document(uid)
+        val emailDocId = currentEmailDocId()
+
+        val uidAdminFlow = db.collection("admins").document(uid)
+            .snapshots()
+            .map { it.exists() }
+            .catch { emit(false) }
+
+        val emailAdminFlow = if (emailDocId != null && emailDocId != uid) {
+            db.collection("admins").document(emailDocId)
+                .snapshots()
+                .map { it.exists() }
+                .catch { emit(false) }
+        } else {
+            flowOf(false)
+        }
+
         emitAll(
-            docRef.snapshots()
-                .map { snapshot ->
-                    if (snapshot.exists()) {
-                        snapshot.toObject(AdminAccount::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                    } else null
-                }
-                .catch { error ->
-                    logScopedFlowError(error, uid, OperationType.GET, docRef.path)
-                    throw error
-                }
+            combine(uidAdminFlow, emailAdminFlow) { uidAdmin, emailAdmin ->
+                isBootstrappedSuperAdmin() || uidAdmin || emailAdmin
+            }
         )
     }
 
@@ -252,7 +396,7 @@ class UserRepository(
             require(message.trim().length in 5..1000) { "Message must be 5–1000 characters" }
             val payload = mutableMapOf<String, Any?>(
                 "userId" to uid,
-                "userEmail" to (auth.currentUser?.email ?: "").take(120),
+                "userEmail" to (auth.currentUser?.email?.takeIf { it.isNotBlank() } ?: "").take(120),
                 "subject" to subject.trim(),
                 "message" to message.trim(),
                 "orderNumber" to orderNumber?.trim()?.take(40)?.takeIf { it.isNotBlank() },
@@ -271,7 +415,7 @@ class UserRepository(
         }
     }
 
-    // --- SUPER ADMIN EXCLUSIVE OPERATIONS ---
+    // --- OWNER EXCLUSIVE OPERATIONS ---
 
     fun observeAllManagers(): Flow<List<ManagerAccount>> = flow {
         val uid = requireUserId()
@@ -290,23 +434,38 @@ class UserRepository(
     }
 
     suspend fun saveManager(manager: ManagerAccount, isEdit: Boolean): Result<Unit> {
-        val targetUid = manager.userId.trim()
-        require(targetUid.matches(Regex("^[a-zA-Z0-9_\\-]{1,128}$"))) {
-            "Valid Firebase User ID is required"
+        val normalizedEmail = manager.email.trim().lowercase()
+        val normalizedPhone = if (manager.phone.isBlank()) {
+            ""
+        } else {
+            IndianPhoneValidator.toE164(manager.phone) ?: manager.phone.trim()
         }
-        val docRef = db.collection("managers").document(targetUid)
+        val targetId = if (isEdit) {
+            manager.id.ifBlank { manager.userId }.trim()
+        } else {
+            EmailDocIdHelper.fromEmail(normalizedEmail)
+        }
         return try {
             val adminUid = requireUserId()
+            require(EmailDocIdHelper.isValidEmail(normalizedEmail)) {
+                "Enter a valid Google email address for the manager"
+            }
+            require(targetId.matches(Regex("^[a-zA-Z0-9_\\-]{1,128}$"))) {
+                "Invalid manager identifier"
+            }
             require(manager.name.trim().length in 1..80) { "Manager name is required" }
+            val docRef = db.collection("managers").document(targetId)
             if (!isEdit) {
                 docRef.set(
                     mapOf(
-                        "userId" to targetUid,
+                        "userId" to targetId,
                         "name" to manager.name.trim(),
-                        "email" to manager.email.trim().take(120),
-                        "phone" to manager.phone.trim().take(30),
+                        "email" to normalizedEmail.take(120),
+                        "phone" to normalizedPhone.take(30),
                         "active" to manager.active,
+                        "canViewOrders" to manager.canViewOrders,
                         "canManageOrders" to manager.canManageOrders,
+                        "canViewMenu" to manager.canViewMenu,
                         "canManageMenu" to manager.canManageMenu,
                         "canViewSales" to manager.canViewSales,
                         "createdBy" to adminUid,
@@ -318,10 +477,12 @@ class UserRepository(
                 docRef.update(
                     mapOf(
                         "name" to manager.name.trim(),
-                        "email" to manager.email.trim().take(120),
-                        "phone" to manager.phone.trim().take(30),
+                        "email" to normalizedEmail.take(120),
+                        "phone" to normalizedPhone.take(30),
                         "active" to manager.active,
+                        "canViewOrders" to manager.canViewOrders,
                         "canManageOrders" to manager.canManageOrders,
+                        "canViewMenu" to manager.canViewMenu,
                         "canManageMenu" to manager.canManageMenu,
                         "canViewSales" to manager.canViewSales,
                         "updatedAt" to FieldValue.serverTimestamp()
@@ -332,7 +493,7 @@ class UserRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.WRITE, docRef.path)
+            handleFirestoreError(e, OperationType.WRITE, "managers/$targetId")
             Result.failure(e)
         }
     }

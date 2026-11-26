@@ -16,18 +16,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Fastfood
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -36,7 +33,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -46,6 +43,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -63,26 +61,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import com.example.data.model.FoodCategory
 import com.example.data.model.FoodItem
 import com.example.data.model.ManagerAccount
 import com.example.data.model.Order
 import com.example.data.model.OrderStatus
 import com.example.data.model.OrderType
 import com.example.data.model.UiState
-import com.example.data.model.VegType
 import com.example.ui.components.EmptyStateView
 import com.example.ui.components.ErrorStateView
-import com.example.ui.components.FoodImageInputField
 import com.example.ui.components.FoodPhoto
 import com.example.ui.components.LoadingView
 import com.example.ui.components.OrderStatusBadge
+import com.example.ui.components.VegTypeBadge
 import com.example.ui.components.formatCurrency
 import com.example.ui.theme.TfcCrimson
 import com.example.ui.theme.TfcJetBlack
 import com.example.ui.theme.TfcPureWhite
+import com.example.ui.theme.TfcSoftRed
 import com.example.ui.theme.TfcSuccessGreen
 import java.util.Calendar
 
@@ -92,30 +88,38 @@ fun ManagerDashboardScreen(
     managerRecord: ManagerAccount?,
     isSuperAdmin: Boolean,
     ordersState: UiState<List<Order>>,
-    categoriesState: UiState<List<FoodCategory>>,
     foodItemsState: UiState<List<FoodItem>>,
     onBack: () -> Unit,
     onUpdateOrderStatus: (String, OrderStatus, String?, String?) -> Unit,
-    onToggleFoodStock: (String, Boolean) -> Unit,
-    onSaveFoodItem: (FoodItem, () -> Unit) -> Unit
+    onToggleFoodStock: (String, Boolean) -> Unit
 ) {
     BackHandler { onBack() }
 
     val hasAccess = isSuperAdmin || (managerRecord?.active == true)
-    val canManageOrders = isSuperAdmin || (managerRecord?.canManageOrders == true)
-    val canManageMenu = isSuperAdmin || (managerRecord?.canManageMenu == true)
-    val canViewSales = isSuperAdmin || (managerRecord?.canViewSales == true)
+    val canViewOrders = isSuperAdmin || (managerRecord?.active == true && (managerRecord.canViewOrders || managerRecord.canManageOrders))
+    val canManageOrders = isSuperAdmin || (managerRecord?.active == true && managerRecord.canManageOrders)
+    val canViewMenu = isSuperAdmin || (managerRecord?.active == true && (managerRecord.canViewMenu || managerRecord.canManageMenu))
+    val canManageMenu = isSuperAdmin || (managerRecord?.active == true && managerRecord.canManageMenu)
+    val canViewSales = isSuperAdmin || (managerRecord?.active == true && managerRecord.canViewSales)
 
     var selectedTab by remember { mutableIntStateOf(0) }
-    var editingFood by remember { mutableStateOf<FoodItem?>(null) }
-    var showFoodDialog by remember { mutableStateOf(false) }
-
     val tabs = listOf("Orders", "Menu Stock", "Daily Sales")
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("TFC Manager Dashboard") },
+                title = {
+                    Column {
+                        Text("TFC Manager Portal")
+                        if (!isSuperAdmin && managerRecord != null) {
+                            Text(
+                                text = "${managerRecord.name} • ${managerRecord.email.ifBlank { managerRecord.phone }}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(
                         onClick = onBack,
@@ -127,27 +131,13 @@ fun ManagerDashboardScreen(
                     }
                 }
             )
-        },
-        floatingActionButton = {
-            if (hasAccess && selectedTab == 1 && canManageMenu) {
-                FloatingActionButton(
-                    onClick = {
-                        editingFood = null
-                        showFoodDialog = true
-                    },
-                    containerColor = TfcCrimson,
-                    contentColor = TfcPureWhite
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "Add food item")
-                }
-            }
         }
     ) { innerPadding ->
         if (!hasAccess) {
             BoxWithConstraints(Modifier.padding(innerPadding)) {
                 EmptyStateView(
                     title = "Manager Access Required",
-                    subtitle = "Your account does not have active Manager permissions. Ask the TFC Super Admin to assign access."
+                    subtitle = "Your Google account does not have active Manager permissions. Ask the Restaurant Owner to add your Google email."
                 )
             }
             return@Scaffold
@@ -199,18 +189,16 @@ fun ManagerDashboardScreen(
 
                     when (selectedTab) {
                         0 -> ManagerOrdersTab(
+                            canViewOrders = canViewOrders,
                             canManageOrders = canManageOrders,
                             ordersState = ordersState,
                             onUpdateOrderStatus = onUpdateOrderStatus
                         )
                         1 -> ManagerMenuTab(
+                            canViewMenu = canViewMenu,
                             canManageMenu = canManageMenu,
                             foodItemsState = foodItemsState,
-                            onToggleFoodStock = onToggleFoodStock,
-                            onEditFood = {
-                                editingFood = it
-                                showFoodDialog = true
-                            }
+                            onToggleFoodStock = onToggleFoodStock
                         )
                         2 -> ManagerDailySalesTab(
                             canViewSales = canViewSales,
@@ -221,28 +209,17 @@ fun ManagerDashboardScreen(
             }
         }
     }
-
-    if (showFoodDialog) {
-        val categories = (categoriesState as? UiState.Success)?.data ?: emptyList()
-        FoodItemEditorDialog(
-            initial = editingFood,
-            categories = categories,
-            onDismiss = { showFoodDialog = false },
-            onSave = { item ->
-                onSaveFoodItem(item) { showFoodDialog = false }
-            }
-        )
-    }
 }
 
 @Composable
 private fun ManagerOrdersTab(
+    canViewOrders: Boolean,
     canManageOrders: Boolean,
     ordersState: UiState<List<Order>>,
     onUpdateOrderStatus: (String, OrderStatus, String?, String?) -> Unit
 ) {
-    if (!canManageOrders) {
-        EmptyStateView("Permission Disabled", "You do not have permission to manage orders.")
+    if (!canViewOrders) {
+        EmptyStateView("Permission Disabled", "The Restaurant Owner has disabled order viewing for your account.")
         return
     }
     var showCompleted by remember { mutableStateOf(false) }
@@ -286,6 +263,7 @@ private fun ManagerOrdersTab(
                         items(filtered, key = { it.id }) { order ->
                             ManagerOrderCard(
                                 order = order,
+                                canManageOrders = canManageOrders,
                                 onAccept = {
                                     onUpdateOrderStatus(order.id, OrderStatus.ACCEPTED, null, null)
                                 },
@@ -334,6 +312,7 @@ private fun ManagerOrdersTab(
 @Composable
 private fun ManagerOrderCard(
     order: Order,
+    canManageOrders: Boolean,
     onAccept: () -> Unit,
     onReject: () -> Unit,
     onAdvance: (OrderStatus) -> Unit
@@ -366,7 +345,7 @@ private fun ManagerOrderCard(
                 Column {
                     Text(order.orderNumber, style = MaterialTheme.typography.titleMedium)
                     Text(
-                        text = "${order.customerName} • ${if (isPickup) "PICKUP" else "DELIVERY"}",
+                        text = "${order.customerName} • ${if (isPickup) "SELF PICKUP" else "HOME DELIVERY"}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -374,13 +353,65 @@ private fun ManagerOrderCard(
                 OrderStatusBadge(order.status)
             }
 
-            Text(
-                text = order.items.joinToString("\n") { "• ${it.quantity}x ${it.name}" },
-                style = MaterialTheme.typography.bodySmall
-            )
+            // Customer contact & address information
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (order.customerPhone.isNotBlank() || order.customerEmail.isNotBlank()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(Icons.Default.Phone, contentDescription = null, tint = TfcCrimson, modifier = Modifier.size(14.dp))
+                            Text(
+                                text = listOfNotNull(
+                                    order.customerPhone.takeIf { it.isNotBlank() },
+                                    order.customerEmail.takeIf { it.isNotBlank() }
+                                ).joinToString(" • "),
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
+                    if (!order.deliveryAddress.isNullOrBlank()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(Icons.Default.LocationOn, contentDescription = null, tint = TfcCrimson, modifier = Modifier.size(14.dp))
+                            Text(
+                                text = buildString {
+                                    append(order.deliveryAddress)
+                                    if (!order.landmark.isNullOrBlank()) append(" (${order.landmark})")
+                                },
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider()
+
+            order.items.forEach { item ->
+                val extra = listOfNotNull(
+                    item.variantName.takeIf { it.isNotBlank() },
+                    item.addonsSummary.takeIf { it.isNotBlank() }?.let { "+ $it" }
+                ).joinToString(" • ")
+                Text(
+                    text = "• ${item.quantity}x ${item.name}" + if (extra.isNotBlank()) " [$extra]" else "",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+
             if (!order.cookingInstructions.isNullOrBlank()) {
                 Text(
-                    text = "Note: ${order.cookingInstructions}",
+                    text = "Cooking Note: ${order.cookingInstructions}",
                     style = MaterialTheme.typography.labelSmall,
                     color = TfcCrimson
                 )
@@ -390,42 +421,44 @@ private fun ManagerOrderCard(
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
             )
 
-            if (status == OrderStatus.ORDER_PLACED) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = onReject,
-                        modifier = Modifier
-                            .weight(1f)
-                            .minimumInteractiveComponentSize()
+            if (canManageOrders) {
+                if (status == OrderStatus.ORDER_PLACED) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Reject", color = TfcCrimson)
+                        OutlinedButton(
+                            onClick = onReject,
+                            modifier = Modifier
+                                .weight(1f)
+                                .minimumInteractiveComponentSize()
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Reject", color = TfcCrimson)
+                        }
+                        Button(
+                            onClick = onAccept,
+                            colors = ButtonDefaults.buttonColors(containerColor = TfcSuccessGreen),
+                            modifier = Modifier
+                                .weight(1f)
+                                .minimumInteractiveComponentSize()
+                        ) {
+                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Accept")
+                        }
                     }
+                } else if (nextStatus != null) {
                     Button(
-                        onClick = onAccept,
-                        colors = ButtonDefaults.buttonColors(containerColor = TfcSuccessGreen),
+                        onClick = { onAdvance(nextStatus) },
+                        colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson),
                         modifier = Modifier
-                            .weight(1f)
+                            .fillMaxWidth()
                             .minimumInteractiveComponentSize()
                     ) {
-                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Accept")
+                        Text("Mark as ${nextStatus.raw}")
                     }
-                }
-            } else if (nextStatus != null) {
-                Button(
-                    onClick = { onAdvance(nextStatus) },
-                    colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .minimumInteractiveComponentSize()
-                ) {
-                    Text("Mark as ${nextStatus.raw}")
                 }
             }
         }
@@ -434,62 +467,87 @@ private fun ManagerOrderCard(
 
 @Composable
 private fun ManagerMenuTab(
+    canViewMenu: Boolean,
     canManageMenu: Boolean,
     foodItemsState: UiState<List<FoodItem>>,
-    onToggleFoodStock: (String, Boolean) -> Unit,
-    onEditFood: (FoodItem) -> Unit
+    onToggleFoodStock: (String, Boolean) -> Unit
 ) {
-    if (!canManageMenu) {
-        EmptyStateView("Permission Disabled", "You do not have permission to manage food items.")
+    if (!canViewMenu) {
+        EmptyStateView("Permission Disabled", "The Restaurant Owner has disabled menu access for your account.")
         return
     }
-    when (foodItemsState) {
-        is UiState.Loading -> LoadingView()
-        is UiState.Error -> ErrorStateView(foodItemsState.message)
-        is UiState.Success -> {
-            if (foodItemsState.data.isEmpty()) {
-                EmptyStateView("No Menu Items", "Tap + to add your first dish to TFC Restaurant.")
-            } else {
-                LazyColumn(
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(foodItemsState.data, key = { it.id }) { item ->
-                        Card(
-                            shape = RoundedCornerShape(14.dp),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+    Column(modifier = Modifier.fillMaxSize()) {
+        Surface(
+            color = TfcSoftRed,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Text(
+                text = if (canManageMenu) {
+                    "Toggle dish availability (In Stock / Out of Stock). Creating or editing prices is restricted to the Restaurant Owner."
+                } else {
+                    "View-only menu mode. Stock updates are disabled for your manager account."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = TfcCrimson,
+                modifier = Modifier.padding(12.dp)
+            )
+        }
+
+        when (foodItemsState) {
+            is UiState.Loading -> LoadingView()
+            is UiState.Error -> ErrorStateView(foodItemsState.message)
+            is UiState.Success -> {
+                if (foodItemsState.data.isEmpty()) {
+                    EmptyStateView(
+                        title = "No Menu Items",
+                        subtitle = "The Restaurant Owner has not published menu items yet."
+                    )
+                } else {
+                    LazyColumn(
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(foodItemsState.data, key = { it.effectiveId }) { item ->
+                            Card(
+                                shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                             ) {
-                                FoodPhoto(
-                                    imageUrl = item.imageUrl,
-                                    contentDescription = item.name,
+                                Row(
                                     modifier = Modifier
-                                        .size(56.dp)
-                                        .clip(RoundedCornerShape(10.dp))
-                                )
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(item.name, style = MaterialTheme.typography.titleSmall)
-                                    Text(
-                                        text = "${formatCurrency(item.effectivePrice)} • ${if (item.available) "In Stock" else "Out of Stock"}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = if (item.available) TfcSuccessGreen else TfcCrimson
-                                    )
-                                }
-                                Switch(
-                                    checked = item.available,
-                                    onCheckedChange = { onToggleFoodStock(item.id, it) }
-                                )
-                                IconButton(
-                                    onClick = { onEditFood(item) },
-                                    modifier = Modifier.minimumInteractiveComponentSize()
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    Icon(Icons.Default.Edit, contentDescription = "Edit item")
+                                    FoodPhoto(
+                                        imageUrl = item.imageUrl,
+                                        contentDescription = item.name,
+                                        modifier = Modifier
+                                            .size(56.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            VegTypeBadge(item.foodType)
+                                            Text(item.name, style = MaterialTheme.typography.titleSmall)
+                                        }
+                                        Text(
+                                            text = "${item.effectiveCategory} • ${formatCurrency(item.effectivePrice)} • ${if (item.isAvailable) "In Stock" else "Out of Stock"}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (item.isAvailable) TfcSuccessGreen else TfcCrimson
+                                        )
+                                    }
+                                    Switch(
+                                        checked = item.isAvailable,
+                                        enabled = canManageMenu,
+                                        onCheckedChange = { onToggleFoodStock(item.effectiveId, it) }
+                                    )
                                 }
                             }
                         }
@@ -587,159 +645,4 @@ fun StatCard(
             )
         }
     }
-}
-
-@Composable
-fun FoodItemEditorDialog(
-    initial: FoodItem?,
-    categories: List<FoodCategory>,
-    onDismiss: () -> Unit,
-    onSave: (FoodItem) -> Unit
-) {
-    var name by remember { mutableStateOf(initial?.name ?: "") }
-    var description by remember { mutableStateOf(initial?.description ?: "") }
-    var priceText by remember { mutableStateOf(initial?.price?.takeIf { it > 0 }?.toString() ?: "") }
-    var discountText by remember { mutableStateOf(initial?.discountedPrice?.toString() ?: "") }
-    var imageUrl by remember { mutableStateOf(initial?.imageUrl ?: "local://img_crispy_bucket") }
-    var selectedCatId by remember {
-        mutableStateOf(initial?.categoryId ?: categories.firstOrNull()?.id ?: "cat_general")
-    }
-    var vegType by remember { mutableStateOf(VegType.fromRaw(initial?.vegType)) }
-    var available by remember { mutableStateOf(initial?.available ?: true) }
-    var featured by remember { mutableStateOf(initial?.featured ?: false) }
-    var popular by remember { mutableStateOf(initial?.popular ?: false) }
-    var prepText by remember { mutableStateOf((initial?.prepTimeMinutes ?: 15L).toString()) }
-    var caloriesText by remember { mutableStateOf((initial?.calories ?: 450L).toString()) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (initial == null) "Add Food Item" else "Edit Food Item") },
-        text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Food Name") })
-                OutlinedTextField(value = description, onValueChange = { description = it }, label = { Text("Description") })
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = priceText,
-                        onValueChange = { priceText = it },
-                        label = { Text("Price ($)") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = discountText,
-                        onValueChange = { discountText = it },
-                        label = { Text("Discount Price") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                if (categories.isNotEmpty()) {
-                    Text("Category", style = MaterialTheme.typography.labelMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        categories.take(4).forEach { cat ->
-                            FilterChip(
-                                selected = selectedCatId == cat.id,
-                                onClick = { selectedCatId = cat.id },
-                                label = { Text(cat.name) }
-                            )
-                        }
-                    }
-                }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = vegType == VegType.NON_VEG,
-                        onClick = { vegType = VegType.NON_VEG },
-                        label = { Text("Non-Veg") }
-                    )
-                    FilterChip(
-                        selected = vegType == VegType.VEG,
-                        onClick = { vegType = VegType.VEG },
-                        label = { Text("Veg") }
-                    )
-                }
-
-                FoodImageInputField(imageUrl = imageUrl, onImageUrlChange = { imageUrl = it })
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = prepText,
-                        onValueChange = { prepText = it },
-                        label = { Text("Prep Mins") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = caloriesText,
-                        onValueChange = { caloriesText = it },
-                        label = { Text("Calories") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Available (In Stock)")
-                    Switch(checked = available, onCheckedChange = { available = it })
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Featured on Home")
-                    Switch(checked = featured, onCheckedChange = { featured = it })
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Popular Badge")
-                    Switch(checked = popular, onCheckedChange = { popular = it })
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    val price = priceText.toDoubleOrNull() ?: return@Button
-                    val discount = discountText.toDoubleOrNull()
-                    val catName = categories.firstOrNull { it.id == selectedCatId }?.name ?: "General"
-                    onSave(
-                        FoodItem(
-                            id = initial?.id ?: "",
-                            name = name.trim(),
-                            description = description.trim(),
-                            categoryId = selectedCatId,
-                            categoryName = catName,
-                            price = price,
-                            discountedPrice = discount,
-                            imageUrl = imageUrl.trim(),
-                            vegType = vegType.raw,
-                            available = available,
-                            featured = featured,
-                            popular = popular,
-                            prepTimeMinutes = prepText.toLongOrNull() ?: 15L,
-                            calories = caloriesText.toLongOrNull() ?: 0L
-                        )
-                    )
-                },
-                enabled = name.isNotBlank() && (priceText.toDoubleOrNull() ?: 0.0) > 0.0,
-                colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson)
-            ) { Text("Save Item") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
-    )
 }

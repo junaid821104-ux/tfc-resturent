@@ -3,14 +3,65 @@ package com.example.data.model
 import androidx.annotation.Keep
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentId
-import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.IgnoreExtraProperties
+import com.google.firebase.firestore.PropertyName
 import com.google.firebase.firestore.ServerTimestamp
 
 sealed interface UiState<out T> {
     data object Loading : UiState<Nothing>
     data class Success<T>(val data: T) : UiState<T>
     data class Error(val message: String) : UiState<Nothing>
+}
+
+enum class LoginRole(val raw: String, val label: String) {
+    CUSTOMER("customer", "Customer"),
+    MANAGER("manager", "Manager"),
+    OWNER("owner", "Restaurant Owner");
+
+    companion object {
+        fun fromRaw(raw: String?): LoginRole =
+            entries.firstOrNull { it.raw == raw } ?: CUSTOMER
+    }
+}
+
+object IndianPhoneValidator {
+    const val COUNTRY_CODE = "+91"
+
+    fun digitsOnly(input: String): String = input.filter { it.isDigit() }
+
+    fun extractTenDigits(input: String): String {
+        val digits = digitsOnly(input)
+        return when {
+            digits.length == 10 -> digits
+            digits.length == 12 && digits.startsWith("91") -> digits.substring(2)
+            digits.length == 11 && digits.startsWith("0") -> digits.substring(1)
+            else -> digits.takeLast(10)
+        }
+    }
+
+    fun isValidTenDigitIndianMobile(tenDigits: String): Boolean =
+        tenDigits.length == 10 &&
+            tenDigits[0] in '6'..'9' &&
+            tenDigits.all { it.isDigit() }
+
+    fun toE164(input: String): String? {
+        val digits = extractTenDigits(input)
+        return if (isValidTenDigitIndianMobile(digits)) "$COUNTRY_CODE$digits" else null
+    }
+}
+
+object EmailDocIdHelper {
+    private val NON_ALNUM = Regex("[^a-z0-9]")
+
+    fun isValidEmail(email: String): Boolean {
+        val trimmed = email.trim()
+        val atIdx = trimmed.indexOf('@')
+        val dotIdx = trimmed.lastIndexOf('.')
+        return atIdx > 0 && dotIdx > atIdx + 1 && dotIdx < trimmed.length - 1 && !trimmed.contains(' ')
+    }
+
+    fun fromEmail(email: String): String =
+        email.trim().lowercase().replace(NON_ALNUM, "_")
 }
 
 enum class VegType(val raw: String, val label: String) {
@@ -52,9 +103,9 @@ enum class OrderStatus(val raw: String) {
 }
 
 enum class PaymentMethod(val raw: String, val subtitle: String) {
-    CASH_ON_DELIVERY("Cash on Delivery", "Pay with cash when your order arrives"),
+    CASH_ON_DELIVERY("Cash on Delivery", "Pay with cash or UPI on doorstep delivery"),
     CASH_AT_PICKUP("Cash at Pickup", "Pay at the TFC restaurant pickup counter"),
-    ONLINE_PAYMENT("Online Payment", "Card / UPI gateway (integration-ready)");
+    ONLINE_PAYMENT("Online Payment", "UPI / Card gateway (integration-ready)");
 
     companion object {
         fun fromRaw(raw: String?): PaymentMethod =
@@ -76,15 +127,37 @@ enum class DiscountType(val raw: String) {
 @IgnoreExtraProperties
 data class UserProfile(
     @DocumentId val id: String = "",
+    val uid: String = "",
+    val name: String = "",
+    val email: String = "",
+    val phoneNumber: String = "",
+    val profileImage: String = "",
+    val role: String = LoginRole.CUSTOMER.raw,
+    @get:PropertyName("isActive") @set:PropertyName("isActive") var isActive: Boolean = true,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+    // Legacy compatibility fields for existing Firestore documents
     val userId: String = "",
     val displayName: String = "",
-    val email: String = "",
     val phone: String = "",
-    val photoUrl: String? = null,
-    val role: String = "customer",
-    @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
-)
+    val photoUrl: String? = null
+) {
+    val effectiveUid: String
+        get() = uid.ifBlank { userId.ifBlank { id } }
+
+    val effectiveName: String
+        get() = name.ifBlank { displayName }
+
+    val effectivePhone: String
+        get() = phoneNumber.ifBlank { phone }
+
+    val effectiveProfileImage: String
+        get() = profileImage.ifBlank { photoUrl.orEmpty() }
+
+    val isProfileCompleted: Boolean
+        get() = effectiveName.isNotBlank() &&
+            IndianPhoneValidator.toE164(effectivePhone) != null
+}
 
 @Keep
 @IgnoreExtraProperties
@@ -95,7 +168,9 @@ data class ManagerAccount(
     val email: String = "",
     val phone: String = "",
     val active: Boolean = true,
+    val canViewOrders: Boolean = true,
     val canManageOrders: Boolean = true,
+    val canViewMenu: Boolean = true,
     val canManageMenu: Boolean = true,
     val canViewSales: Boolean = true,
     val createdBy: String = "",
@@ -110,6 +185,7 @@ data class AdminAccount(
     val userId: String = "",
     val name: String = "",
     val email: String = "",
+    val phone: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
@@ -117,7 +193,8 @@ data class AdminAccount(
 @Keep
 @IgnoreExtraProperties
 data class FoodCategory(
-    @DocumentId val id: String = "",
+    @DocumentId val docId: String = "",
+    val id: String = "",
     val name: String = "",
     val description: String = "",
     val imageUrl: String = "",
@@ -125,37 +202,72 @@ data class FoodCategory(
     val active: Boolean = true,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
-)
+) {
+    val effectiveId: String get() = docId.ifBlank { id }
+}
+
+@Keep
+@IgnoreExtraProperties
+data class FoodVariant(
+    val name: String = "",
+    val price: Double = 0.0
+) {
+    fun toMap(): Map<String, Any> = mapOf(
+        "name" to name.trim(),
+        "price" to price
+    )
+}
+
+@Keep
+@IgnoreExtraProperties
+data class FoodAddon(
+    val name: String = "",
+    val price: Double = 0.0
+) {
+    fun toMap(): Map<String, Any> = mapOf(
+        "name" to name.trim(),
+        "price" to price
+    )
+}
 
 @Keep
 @IgnoreExtraProperties
 data class FoodItem(
-    @DocumentId val id: String = "",
+    @DocumentId val docId: String = "",
+    val id: String = "",
     val name: String = "",
     val description: String = "",
-    val categoryId: String = "",
-    val categoryName: String = "",
     val price: Double = 0.0,
-    val discountedPrice: Double? = null,
+    val discountPrice: Double? = null,
     val imageUrl: String = "",
-    val vegType: String = VegType.NON_VEG.raw,
-    val available: Boolean = true,
+    val category: String = "",
+    val categoryId: String = "",
+    val foodType: String = VegType.NON_VEG.raw,
+    @get:PropertyName("isAvailable") @set:PropertyName("isAvailable") var isAvailable: Boolean = true,
+    @get:PropertyName("isPopular") @set:PropertyName("isPopular") var isPopular: Boolean = false,
     val featured: Boolean = false,
-    val popular: Boolean = false,
     val prepTimeMinutes: Long = 15L,
     val calories: Long = 0L,
+    val variants: List<FoodVariant> = emptyList(),
+    val addons: List<FoodAddon> = emptyList(),
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
+    val effectiveId: String
+        get() = docId.ifBlank { id }
+
+    val effectiveCategory: String
+        get() = category.ifBlank { "General" }
+
     val effectivePrice: Double
-        get() = if (discountedPrice != null && discountedPrice > 0.0 && discountedPrice < price) {
-            discountedPrice
+        get() = if (discountPrice != null && discountPrice > 0.0 && discountPrice < price) {
+            discountPrice
         } else {
             price
         }
 
     val hasDiscount: Boolean
-        get() = discountedPrice != null && discountedPrice > 0.0 && discountedPrice < price
+        get() = discountPrice != null && discountPrice > 0.0 && discountPrice < price
 }
 
 @Keep
@@ -166,16 +278,20 @@ data class OrderItem(
     val price: Double = 0.0,
     val quantity: Long = 1L,
     val imageUrl: String = "",
-    val vegType: String = VegType.NON_VEG.raw
+    val vegType: String = VegType.NON_VEG.raw,
+    val variantName: String = "",
+    val addonsSummary: String = ""
 ) {
-    fun toMap(): Map<String, Any> = mapOf(
-        "itemId" to itemId,
-        "name" to name,
-        "price" to price,
-        "quantity" to quantity,
-        "imageUrl" to imageUrl,
-        "vegType" to vegType
-    )
+    fun toMap(): Map<String, Any> = buildMap {
+        put("itemId", itemId)
+        put("name", name)
+        put("price", price)
+        put("quantity", quantity)
+        put("imageUrl", imageUrl)
+        put("vegType", vegType)
+        if (variantName.isNotBlank()) put("variantName", variantName)
+        if (addonsSummary.isNotBlank()) put("addonsSummary", addonsSummary)
+    }
 }
 
 @Keep
@@ -247,15 +363,16 @@ data class Coupon(
 data class RestaurantSettings(
     @DocumentId val id: String = "main",
     val restaurantName: String = "TFC",
-    val restaurantAddress: String = "450 Culinary Boulevard, Downtown",
+    val restaurantAddress: String = "14th Main, Indiranagar, Bengaluru 560038",
     val pickupInstructions: String = "Present your Order ID at the TFC Express Pickup Counter inside the main lobby.",
-    val openingHours: String = "10:00 AM - 11:00 PM",
+    val openingHours: String = "10:00 AM - 11:30 PM",
     val orderingOpen: Boolean = true,
-    val minimumOrderAmount: Double = 10.0,
-    val baseDeliveryFee: Double = 2.99,
+    val minimumOrderAmount: Double = 0.0,
+    val baseDeliveryFee: Double = 40.0,
     val estimatedPickupMinutes: Long = 15L,
-    val supportPhone: String = "+1 (800) 555-0199",
-    val supportEmail: String = "support@tfcrestaurant.com",
+    val supportPhone: String = "+919876543210",
+    val supportEmail: String = "support@tfcrestaurant.in",
+    val ownerPhone: String = "",
     val activeBannerTitle: String = "Crispy Perfection, Delivered Hot",
     val activeBannerSubtitle: String = "Signature fried chicken, gourmet burgers & hand-spun sides.",
     @ServerTimestamp val updatedAt: Timestamp? = null
@@ -290,7 +407,30 @@ data class SupportTicket(
 
 data class CartLineItem(
     val foodItem: FoodItem,
-    val quantity: Int
+    val quantity: Int,
+    val selectedVariant: FoodVariant? = null,
+    val selectedAddons: List<FoodAddon> = emptyList()
 ) {
-    val lineTotal: Double get() = foodItem.effectivePrice * quantity
+    val cartKey: String
+        get() {
+            val vKey = selectedVariant?.name?.trim().orEmpty()
+            val aKey = selectedAddons.map { it.name.trim() }.sorted().joinToString(",")
+            return "${foodItem.effectiveId}|$vKey|$aKey"
+        }
+
+    val unitPrice: Double
+        get() = (selectedVariant?.price ?: foodItem.effectivePrice) + selectedAddons.sumOf { it.price }
+
+    val lineTotal: Double
+        get() = unitPrice * quantity
+
+    val customizationSummary: String
+        get() = buildList {
+            if (selectedVariant != null && selectedVariant.name.isNotBlank()) {
+                add(selectedVariant.name)
+            }
+            if (selectedAddons.isNotEmpty()) {
+                add("+ ${selectedAddons.joinToString(", ") { it.name }}")
+            }
+        }.joinToString(" • ")
 }

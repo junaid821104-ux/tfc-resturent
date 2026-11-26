@@ -374,11 +374,24 @@ fun OrderTrackingScreen(
                                     ) {
                                         Text("Items Ordered", style = MaterialTheme.typography.titleMedium)
                                         order.items.forEach { item ->
+                                            val extra = listOfNotNull(
+                                                item.variantName.takeIf { it.isNotBlank() },
+                                                item.addonsSummary.takeIf { it.isNotBlank() }?.let { "+ $it" }
+                                            ).joinToString(" • ")
                                             Row(
                                                 modifier = Modifier.fillMaxWidth(),
                                                 horizontalArrangement = Arrangement.SpaceBetween
                                             ) {
-                                                Text("${item.quantity}x ${item.name}", style = MaterialTheme.typography.bodyMedium)
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text("${item.quantity}x ${item.name}", style = MaterialTheme.typography.bodyMedium)
+                                                    if (extra.isNotBlank()) {
+                                                        Text(
+                                                            text = extra,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                }
                                                 Text(formatCurrency(item.price * item.quantity), style = MaterialTheme.typography.bodyMedium)
                                             }
                                         }
@@ -494,7 +507,10 @@ fun OrdersScreen(
                                     }
 
                                     Text(
-                                        text = order.items.joinToString(", ") { "${it.quantity}x ${it.name}" },
+                                        text = order.items.joinToString(", ") {
+                                            val v = if (it.variantName.isNotBlank()) " (${it.variantName})" else ""
+                                            "${it.quantity}x ${it.name}$v"
+                                        },
                                         style = MaterialTheme.typography.bodyMedium,
                                         maxLines = 2
                                     )

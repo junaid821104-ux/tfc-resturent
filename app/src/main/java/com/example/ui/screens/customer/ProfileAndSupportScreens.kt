@@ -67,6 +67,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.input.KeyboardType
+import coil.compose.AsyncImage
+import com.example.data.model.IndianPhoneValidator
 import com.example.data.model.ManagerAccount
 import com.example.data.model.RestaurantSettings
 import com.example.data.model.SavedAddress
@@ -127,32 +132,65 @@ fun ProfileScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(54.dp)
-                                    .clip(CircleShape)
-                                    .background(TfcCrimson),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = (userProfile?.displayName?.firstOrNull() ?: 'T').uppercase(),
-                                    style = MaterialTheme.typography.titleLarge.copy(color = TfcPureWhite)
+                            val profileImg = userProfile?.effectiveProfileImage.orEmpty()
+                            val displayName = userProfile?.effectiveName?.ifBlank { "TFC Guest" } ?: "TFC Guest"
+                            val displayPhone = userProfile?.effectivePhone.orEmpty()
+                            if (profileImg.isNotBlank()) {
+                                AsyncImage(
+                                    model = profileImg,
+                                    contentDescription = "Profile photo",
+                                    modifier = Modifier
+                                        .size(54.dp)
+                                        .clip(CircleShape),
+                                    contentScale = ContentScale.Crop
                                 )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .size(54.dp)
+                                        .clip(CircleShape)
+                                        .background(TfcCrimson),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = (displayName.firstOrNull() ?: 'T').uppercase(),
+                                        style = MaterialTheme.typography.titleLarge.copy(color = TfcPureWhite)
+                                    )
+                                }
                             }
                             Column {
                                 Text(
-                                    text = userProfile?.displayName ?: "TFC Guest",
+                                    text = displayName,
                                     style = MaterialTheme.typography.titleLarge.copy(color = TfcPureWhite)
                                 )
+                                val roleLabel = when {
+                                    isSuperAdmin -> "Restaurant Owner"
+                                    myManagerRecord?.active == true -> "Manager"
+                                    else -> "Customer"
+                                }
+                                Surface(
+                                    color = TfcCrimson,
+                                    shape = RoundedCornerShape(50),
+                                    modifier = Modifier.padding(top = 2.dp, bottom = 2.dp)
+                                ) {
+                                    Text(
+                                        text = roleLabel,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            color = TfcPureWhite,
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    )
+                                }
                                 if (!userProfile?.email.isNullOrBlank()) {
                                     Text(
                                         text = userProfile?.email ?: "",
                                         style = MaterialTheme.typography.bodySmall.copy(color = TfcPureWhite.copy(alpha = 0.78f))
                                     )
                                 }
-                                if (!userProfile?.phone.isNullOrBlank()) {
+                                if (displayPhone.isNotBlank()) {
                                     Text(
-                                        text = userProfile?.phone ?: "",
+                                        text = displayPhone,
                                         style = MaterialTheme.typography.bodySmall.copy(color = TfcPureWhite.copy(alpha = 0.78f))
                                     )
                                 }
@@ -245,7 +283,7 @@ fun ProfileScreen(
                             ) {
                                 Icon(Icons.Default.AdminPanelSettings, contentDescription = null)
                                 Spacer(Modifier.width(8.dp))
-                                Text("Open Super Admin Dashboard")
+                                Text("Open Restaurant Owner Dashboard")
                             }
                         }
                     }
@@ -360,8 +398,13 @@ fun ProfileScreen(
     }
 
     if (showEditProfile) {
-        var name by remember(userProfile) { mutableStateOf(userProfile?.displayName ?: "") }
-        var phone by remember(userProfile) { mutableStateOf(userProfile?.phone ?: "") }
+        var name by remember(userProfile) { mutableStateOf(userProfile?.effectiveName ?: "") }
+        var tenDigits by remember(userProfile) {
+            mutableStateOf(
+                userProfile?.effectivePhone?.let { IndianPhoneValidator.extractTenDigits(it) } ?: ""
+            )
+        }
+        val validPhone = IndianPhoneValidator.isValidTenDigitIndianMobile(tenDigits)
         AlertDialog(
             onDismissRequest = { showEditProfile = false },
             title = { Text("Edit Profile") },
@@ -369,14 +412,26 @@ fun ProfileScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
                         value = name,
-                        onValueChange = { name = it },
-                        label = { Text("Full Name") },
+                        onValueChange = { if (it.length <= 80) name = it },
+                        label = { Text("Full Name *") },
                         singleLine = true
                     )
                     OutlinedTextField(
-                        value = phone,
-                        onValueChange = { phone = it },
-                        label = { Text("Phone Number") },
+                        value = userProfile?.email.orEmpty(),
+                        onValueChange = {},
+                        enabled = false,
+                        readOnly = true,
+                        label = { Text("Google Email (Read-Only)") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = tenDigits,
+                        onValueChange = { raw -> tenDigits = raw.filter { it.isDigit() }.take(10) },
+                        label = { Text("🇮🇳 Indian Mobile (+91) *") },
+                        prefix = { Text("+91 ") },
+                        placeholder = { Text("9876543210") },
+                        isError = tenDigits.isNotEmpty() && !validPhone,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true
                     )
                 }
@@ -384,11 +439,12 @@ fun ProfileScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        if (name.trim().isNotEmpty()) {
-                            onUpdateProfile(name, phone)
+                        if (name.trim().isNotEmpty() && validPhone) {
+                            onUpdateProfile(name.trim(), tenDigits)
                             showEditProfile = false
                         }
                     },
+                    enabled = name.trim().isNotEmpty() && validPhone,
                     colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson)
                 ) { Text("Save") }
             },
@@ -508,7 +564,7 @@ fun CustomerSupportScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = "TFC Guest Care",
+                            text = "TFC Guest Care (India +91)",
                             style = MaterialTheme.typography.titleLarge.copy(color = TfcPureWhite)
                         )
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {

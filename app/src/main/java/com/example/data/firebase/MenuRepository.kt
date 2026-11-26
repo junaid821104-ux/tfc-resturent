@@ -7,6 +7,7 @@ import com.example.data.model.DeliveryZone
 import com.example.data.model.DiscountType
 import com.example.data.model.FoodCategory
 import com.example.data.model.FoodItem
+import com.example.data.model.IndianPhoneValidator
 import com.example.data.model.RestaurantSettings
 import com.example.data.model.VegType
 import com.google.firebase.Firebase
@@ -42,14 +43,14 @@ class MenuRepository(
     fun observeCategories(): Flow<List<FoodCategory>> = flow {
         val uid = requireUserId()
         emitAll(
-            db.collection("food_categories")
+            db.collection("categories")
                 .snapshots()
                 .map { snapshot ->
                     snapshot.toObjects(FoodCategory::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
                         .sortedBy { it.sortOrder }
                 }
                 .catch { error ->
-                    logScopedFlowError(error, uid, OperationType.LIST, "food_categories")
+                    logScopedFlowError(error, uid, OperationType.LIST, "categories")
                     throw error
                 }
         )
@@ -120,16 +121,18 @@ class MenuRepository(
     }
 
     suspend fun saveCategory(category: FoodCategory): Result<Unit> {
-        val col = db.collection("food_categories")
-        val docRef = if (category.id.isBlank()) col.document() else col.document(category.id)
+        val col = db.collection("categories")
+        val existingId = category.effectiveId
+        val docRef = if (existingId.isBlank()) col.document() else col.document(existingId)
         return try {
             requireUserId()
             require(category.name.trim().length in 1..60) { "Category name must be 1–60 characters" }
-            if (category.id.isBlank()) {
+            if (existingId.isBlank()) {
                 val payload = mapOf(
+                    "id" to docRef.id,
                     "name" to category.name.trim(),
                     "description" to category.description.trim().take(200),
-                    "imageUrl" to category.imageUrl.trim().take(500),
+                    "imageUrl" to category.imageUrl.trim().take(250_000),
                     "sortOrder" to category.sortOrder.coerceIn(0L, 9999L),
                     "active" to category.active,
                     "createdAt" to FieldValue.serverTimestamp(),
@@ -139,9 +142,10 @@ class MenuRepository(
             } else {
                 docRef.update(
                     mapOf(
+                        "id" to docRef.id,
                         "name" to category.name.trim(),
                         "description" to category.description.trim().take(200),
-                        "imageUrl" to category.imageUrl.trim().take(500),
+                        "imageUrl" to category.imageUrl.trim().take(250_000),
                         "sortOrder" to category.sortOrder.coerceIn(0L, 9999L),
                         "active" to category.active,
                         "updatedAt" to FieldValue.serverTimestamp()
@@ -158,11 +162,11 @@ class MenuRepository(
     }
 
     suspend fun deleteCategory(categoryId: String): Result<Unit> {
-        val path = "food_categories/$categoryId"
+        val path = "categories/$categoryId"
         return try {
             requireUserId()
             require(categoryId.isNotBlank())
-            db.collection("food_categories").document(categoryId).delete().await()
+            db.collection("categories").document(categoryId).delete().await()
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -174,48 +178,58 @@ class MenuRepository(
 
     suspend fun saveFoodItem(item: FoodItem): Result<Unit> {
         val col = db.collection("food_items")
-        val docRef = if (item.id.isBlank()) col.document() else col.document(item.id)
+        val existingId = item.effectiveId
+        val docRef = if (existingId.isBlank()) col.document() else col.document(existingId)
         return try {
             requireUserId()
             require(item.name.trim().length in 1..100) { "Food name must be 1–100 characters" }
-            require(item.price > 0.0 && item.price <= 100000.0) { "Price must be greater than 0" }
-            val validDiscount = item.discountedPrice?.takeIf { it > 0.0 && it < item.price }
-            if (item.id.isBlank()) {
+            require(item.price > 0.0 && item.price <= 100000.0) { "Price must be greater than ₹0" }
+            val validDiscount = item.discountPrice?.takeIf { it > 0.0 && it < item.price }
+            val cleanCategory = item.category.trim().take(60).ifBlank { "General" }
+            val cleanVariants = item.variants.filter { it.name.isNotBlank() && it.price > 0.0 }.take(20).map { it.toMap() }
+            val cleanAddons = item.addons.filter { it.name.isNotBlank() && it.price >= 0.0 }.take(30).map { it.toMap() }
+
+            if (existingId.isBlank()) {
                 val payload = mutableMapOf<String, Any>(
+                    "id" to docRef.id,
                     "name" to item.name.trim(),
                     "description" to item.description.trim().take(500),
-                    "categoryId" to item.categoryId,
-                    "categoryName" to item.categoryName.trim().take(60).ifBlank { "General" },
                     "price" to item.price,
-                    "imageUrl" to item.imageUrl.trim().take(500),
-                    "vegType" to VegType.fromRaw(item.vegType).raw,
-                    "available" to item.available,
+                    "imageUrl" to item.imageUrl.trim().take(250_000),
+                    "category" to cleanCategory,
+                    "categoryId" to item.categoryId.trim().take(128),
+                    "foodType" to VegType.fromRaw(item.foodType).raw,
+                    "isAvailable" to item.isAvailable,
+                    "isPopular" to item.isPopular,
                     "featured" to item.featured,
-                    "popular" to item.popular,
                     "prepTimeMinutes" to item.prepTimeMinutes.coerceIn(1L, 240L),
                     "calories" to item.calories.coerceIn(0L, 10000L),
+                    "variants" to cleanVariants,
+                    "addons" to cleanAddons,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
-                if (validDiscount != null) payload["discountedPrice"] = validDiscount
+                if (validDiscount != null) payload["discountPrice"] = validDiscount
                 docRef.set(payload).await()
             } else {
                 val payload = mutableMapOf<String, Any>(
                     "name" to item.name.trim(),
                     "description" to item.description.trim().take(500),
-                    "categoryId" to item.categoryId,
-                    "categoryName" to item.categoryName.trim().take(60).ifBlank { "General" },
                     "price" to item.price,
-                    "imageUrl" to item.imageUrl.trim().take(500),
-                    "vegType" to VegType.fromRaw(item.vegType).raw,
-                    "available" to item.available,
+                    "imageUrl" to item.imageUrl.trim().take(250_000),
+                    "category" to cleanCategory,
+                    "categoryId" to item.categoryId.trim().take(128),
+                    "foodType" to VegType.fromRaw(item.foodType).raw,
+                    "isAvailable" to item.isAvailable,
+                    "isPopular" to item.isPopular,
                     "featured" to item.featured,
-                    "popular" to item.popular,
                     "prepTimeMinutes" to item.prepTimeMinutes.coerceIn(1L, 240L),
                     "calories" to item.calories.coerceIn(0L, 10000L),
+                    "variants" to cleanVariants,
+                    "addons" to cleanAddons,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
-                payload["discountedPrice"] = validDiscount ?: FieldValue.delete()
+                payload["discountPrice"] = validDiscount ?: FieldValue.delete()
                 docRef.update(payload).await()
             }
             Result.success(Unit)
@@ -234,7 +248,7 @@ class MenuRepository(
             require(itemId.isNotBlank())
             db.collection("food_items").document(itemId).update(
                 mapOf(
-                    "available" to available,
+                    "isAvailable" to available,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
@@ -380,24 +394,22 @@ class MenuRepository(
         val docRef = db.collection("restaurant_settings").document("main")
         return try {
             requireUserId()
-            docRef.set(
-                mapOf(
-                    "restaurantName" to settings.restaurantName.trim().take(80).ifBlank { "TFC" },
-                    "restaurantAddress" to settings.restaurantAddress.trim().take(300),
-                    "pickupInstructions" to settings.pickupInstructions.trim().take(300),
-                    "openingHours" to settings.openingHours.trim().take(120).ifBlank { "10:00 AM - 11:00 PM" },
-                    "orderingOpen" to settings.orderingOpen,
-                    "minimumOrderAmount" to settings.minimumOrderAmount.coerceIn(0.0, 100000.0),
-                    "baseDeliveryFee" to settings.baseDeliveryFee.coerceIn(0.0, 10000.0),
-                    "estimatedPickupMinutes" to settings.estimatedPickupMinutes.coerceIn(1L, 180L),
-                    "supportPhone" to settings.supportPhone.trim().take(30),
-                    "supportEmail" to settings.supportEmail.trim().take(120),
-                    "activeBannerTitle" to settings.activeBannerTitle.trim().take(100),
-                    "activeBannerSubtitle" to settings.activeBannerSubtitle.trim().take(200),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                ),
-                SetOptions.merge()
-            ).await()
+            val payload = mapOf(
+                "restaurantName" to settings.restaurantName.trim().take(80).ifBlank { "TFC" },
+                "restaurantAddress" to settings.restaurantAddress.trim().take(300),
+                "pickupInstructions" to settings.pickupInstructions.trim().take(300),
+                "openingHours" to settings.openingHours.trim().take(120).ifBlank { "10:00 AM - 11:30 PM" },
+                "orderingOpen" to settings.orderingOpen,
+                "minimumOrderAmount" to settings.minimumOrderAmount.coerceIn(0.0, 100000.0),
+                "baseDeliveryFee" to settings.baseDeliveryFee.coerceIn(0.0, 10000.0),
+                "estimatedPickupMinutes" to settings.estimatedPickupMinutes.coerceIn(1L, 180L),
+                "supportPhone" to settings.supportPhone.trim().take(30),
+                "supportEmail" to settings.supportEmail.trim().take(120),
+                "activeBannerTitle" to settings.activeBannerTitle.trim().take(100),
+                "activeBannerSubtitle" to settings.activeBannerSubtitle.trim().take(200),
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            docRef.set(payload, SetOptions.merge()).await()
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -407,28 +419,25 @@ class MenuRepository(
         }
     }
 
-    /**
-     * Admin-triggered setup helper to populate initial TFC Restaurant categories,
-     * signature menu items, delivery zones, coupons, and restaurant settings in Firestore.
-     */
-    suspend fun initializeStarterCatalog(): Result<Unit> {
+    suspend fun initializeStarterCatalog(unusedOwnerPhone: String = ""): Result<Unit> {
         return try {
             requireUserId()
             val batch = db.batch()
             val settingsRef = db.collection("restaurant_settings").document("main")
+
             batch.set(
                 settingsRef,
                 mapOf(
                     "restaurantName" to "TFC",
-                    "restaurantAddress" to "450 Culinary Boulevard, Downtown",
+                    "restaurantAddress" to "14th Main, Indiranagar, Bengaluru 560038",
                     "pickupInstructions" to "Present your Order ID at the TFC Express Pickup Counter inside the main lobby.",
-                    "openingHours" to "10:00 AM - 11:00 PM",
+                    "openingHours" to "10:00 AM - 11:30 PM",
                     "orderingOpen" to true,
-                    "minimumOrderAmount" to 10.0,
-                    "baseDeliveryFee" to 2.99,
+                    "minimumOrderAmount" to 149.0,
+                    "baseDeliveryFee" to 40.0,
                     "estimatedPickupMinutes" to 15L,
-                    "supportPhone" to "+1 (800) 555-0199",
-                    "supportEmail" to "support@tfcrestaurant.com",
+                    "supportPhone" to "+919876543210",
+                    "supportEmail" to "support@tfcrestaurant.in",
                     "activeBannerTitle" to "Crispy Perfection, Delivered Hot",
                     "activeBannerSubtitle" to "Signature fried chicken, gourmet burgers & hand-spun sides.",
                     "updatedAt" to FieldValue.serverTimestamp()
@@ -443,8 +452,9 @@ class MenuRepository(
             )
             cats.forEach { (id, name, order) ->
                 batch.set(
-                    db.collection("food_categories").document(id),
+                    db.collection("categories").document(id),
                     mapOf(
+                        "id" to id,
                         "name" to name,
                         "description" to "Freshly prepared $name at TFC Restaurant",
                         "imageUrl" to "",
@@ -458,97 +468,123 @@ class MenuRepository(
 
             val items: List<Map<String, Any>> = listOf(
                 mapOf(
-                    "docId" to "item_tfc_bucket_8",
+                    "id" to "item_tfc_bucket_8",
                     "name" to "TFC 8-Piece Signature Bucket",
-                    "description" to "Eight hand-breaded golden crispy chicken pieces with two house dips.",
+                    "description" to "Eight hand-breaded golden crispy chicken pieces with peri-peri masala and two house dips.",
                     "categoryId" to "cat_buckets",
-                    "categoryName" to "Crispy Buckets",
-                    "price" to 24.99,
-                    "discountedPrice" to 19.99,
+                    "category" to "Crispy Buckets",
+                    "price" to 649.0,
+                    "discountPrice" to 549.0,
                     "imageUrl" to "local://img_crispy_bucket",
-                    "vegType" to "NON_VEG",
+                    "foodType" to "NON_VEG",
                     "featured" to true,
-                    "popular" to true,
+                    "isPopular" to true,
                     "prepTimeMinutes" to 18L,
-                    "calories" to 1420L
+                    "calories" to 1420L,
+                    "variants" to listOf(
+                        mapOf("name" to "Regular (4 Pcs)", "price" to 329.0),
+                        mapOf("name" to "Family Bucket (8 Pcs)", "price" to 549.0)
+                    ),
+                    "addons" to listOf(
+                        mapOf("name" to "Peri-Peri Dip", "price" to 35.0),
+                        mapOf("name" to "Garlic Mayo Dip", "price" to 30.0)
+                    )
                 ),
                 mapOf(
-                    "docId" to "item_spicy_brioche_burger",
-                    "name" to "Crimson Crunch Brioche Burger",
-                    "description" to "Double-dredged crispy chicken fillet, aged cheddar, spicy chili glaze on toasted brioche.",
+                    "id" to "item_spicy_brioche_burger",
+                    "name" to "Crimson Crunch Zinger Burger",
+                    "description" to "Double-dredged crispy chicken fillet, cheddar slice, spicy chili glaze on toasted brioche.",
                     "categoryId" to "cat_burgers",
-                    "categoryName" to "Signature Burgers",
-                    "price" to 12.49,
-                    "discountedPrice" to 9.99,
+                    "category" to "Signature Burgers",
+                    "price" to 219.0,
+                    "discountPrice" to 189.0,
                     "imageUrl" to "local://img_burger_deluxe",
-                    "vegType" to "NON_VEG",
+                    "foodType" to "NON_VEG",
                     "featured" to true,
-                    "popular" to true,
+                    "isPopular" to true,
                     "prepTimeMinutes" to 14L,
-                    "calories" to 740L
+                    "calories" to 740L,
+                    "variants" to listOf(
+                        mapOf("name" to "Single Fillet", "price" to 189.0),
+                        mapOf("name" to "Double Fillet", "price" to 259.0)
+                    ),
+                    "addons" to listOf(
+                        mapOf("name" to "Extra Cheese Slice", "price" to 30.0),
+                        mapOf("name" to "Jalapenos", "price" to 25.0)
+                    )
                 ),
                 mapOf(
-                    "docId" to "item_hot_wings_6",
-                    "name" to "Nashville Fire Wings (6 pcs)",
-                    "description" to "Glazed crispy wings tossed in smoky cayenne butter with cool ranch dip.",
+                    "id" to "item_hot_wings_6",
+                    "name" to "Fiery Peri-Peri Wings (6 Pcs)",
+                    "description" to "Glazed crispy wings tossed in smoky Indian chili butter with cool mint ranch.",
                     "categoryId" to "cat_buckets",
-                    "categoryName" to "Crispy Buckets",
-                    "price" to 10.99,
+                    "category" to "Crispy Buckets",
+                    "price" to 249.0,
                     "imageUrl" to "local://img_crispy_bucket",
-                    "vegType" to "NON_VEG",
+                    "foodType" to "NON_VEG",
                     "featured" to false,
-                    "popular" to true,
+                    "isPopular" to true,
                     "prepTimeMinutes" to 12L,
-                    "calories" to 620L
+                    "calories" to 620L,
+                    "variants" to emptyList<Map<String, Any>>(),
+                    "addons" to listOf(mapOf("name" to "Mint Mayo Dip", "price" to 30.0))
                 ),
                 mapOf(
-                    "docId" to "item_paneer_crunch_burger",
-                    "name" to "Crispy Herb Cottage Burger",
-                    "description" to "Golden spiced cottage cheese patty, crisp lettuce, and smoky garlic aioli.",
+                    "id" to "item_paneer_crunch_burger",
+                    "name" to "Crispy Herb Paneer Burger",
+                    "description" to "Golden spiced cottage cheese patty, crisp iceberg lettuce, and smoky garlic aioli.",
                     "categoryId" to "cat_burgers",
-                    "categoryName" to "Signature Burgers",
-                    "price" to 9.49,
+                    "category" to "Signature Burgers",
+                    "price" to 179.0,
                     "imageUrl" to "local://img_burger_deluxe",
-                    "vegType" to "VEG",
+                    "foodType" to "VEG",
                     "featured" to true,
-                    "popular" to false,
+                    "isPopular" to false,
                     "prepTimeMinutes" to 12L,
-                    "calories" to 590L
+                    "calories" to 590L,
+                    "variants" to emptyList<Map<String, Any>>(),
+                    "addons" to listOf(mapOf("name" to "Extra Cheese Slice", "price" to 30.0))
                 ),
                 mapOf(
-                    "docId" to "item_truffle_fries",
-                    "name" to "Loaded Black-Pepper Fries",
-                    "description" to "Skin-on golden fries tossed in cracked black pepper, sea salt, and cheddar drizzle.",
+                    "id" to "item_truffle_fries",
+                    "name" to "Loaded Peri-Peri Fries",
+                    "description" to "Skin-on golden fries tossed in peri-peri spice and creamy cheddar drizzle.",
                     "categoryId" to "cat_sides",
-                    "categoryName" to "Sides & Wraps",
-                    "price" to 5.49,
+                    "category" to "Sides & Wraps",
+                    "price" to 119.0,
                     "imageUrl" to "local://img_hero_banner",
-                    "vegType" to "VEG",
+                    "foodType" to "VEG",
                     "featured" to false,
-                    "popular" to true,
+                    "isPopular" to true,
                     "prepTimeMinutes" to 8L,
-                    "calories" to 430L
+                    "calories" to 430L,
+                    "variants" to listOf(
+                        mapOf("name" to "Medium", "price" to 119.0),
+                        mapOf("name" to "Large", "price" to 159.0)
+                    ),
+                    "addons" to listOf(mapOf("name" to "Cheese Sauce", "price" to 40.0))
                 ),
                 mapOf(
-                    "docId" to "item_crimson_berry_cooler",
-                    "name" to "TFC Crimson Berry Fizz",
-                    "description" to "Chilled sparkling hibiscus and cranberry cooler over crushed ice.",
+                    "id" to "item_crimson_berry_cooler",
+                    "name" to "TFC Masala Mint Fizz",
+                    "description" to "Chilled sparkling cranberry and fresh mint cooler over crushed ice.",
                     "categoryId" to "cat_drinks",
-                    "categoryName" to "Drinks & Shakes",
-                    "price" to 3.99,
+                    "category" to "Drinks & Shakes",
+                    "price" to 89.0,
                     "imageUrl" to "local://img_hero_banner",
-                    "vegType" to "VEG",
+                    "foodType" to "VEG",
                     "featured" to false,
-                    "popular" to false,
+                    "isPopular" to false,
                     "prepTimeMinutes" to 5L,
-                    "calories" to 140L
+                    "calories" to 140L,
+                    "variants" to emptyList<Map<String, Any>>(),
+                    "addons" to emptyList<Map<String, Any>>()
                 )
             )
             items.forEach { raw ->
-                val docId = raw["docId"] as String
-                val payload = mutableMapOf<String, Any>()
-                raw.forEach { (k, v) -> if (k != "docId") payload[k] = v }
-                payload["available"] = true
+                val docId = raw["id"] as String
+                val payload = raw.toMutableMap()
+                payload["isAvailable"] = true
                 payload["createdAt"] = FieldValue.serverTimestamp()
                 payload["updatedAt"] = FieldValue.serverTimestamp()
                 batch.set(db.collection("food_items").document(docId), payload)
@@ -557,10 +593,10 @@ class MenuRepository(
             batch.set(
                 db.collection("delivery_zones").document("zone_downtown"),
                 mapOf(
-                    "name" to "Downtown Core (0–5 km)",
-                    "fee" to 1.99,
+                    "name" to "Central Zone (0–5 km)",
+                    "fee" to 30.0,
                     "estimatedMinutes" to 25L,
-                    "minOrderAmount" to 10.0,
+                    "minOrderAmount" to 149.0,
                     "active" to true,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
@@ -569,10 +605,10 @@ class MenuRepository(
             batch.set(
                 db.collection("delivery_zones").document("zone_suburbs"),
                 mapOf(
-                    "name" to "Metro Extended (5–12 km)",
-                    "fee" to 3.99,
+                    "name" to "Extended City (5–12 km)",
+                    "fee" to 60.0,
                     "estimatedMinutes" to 40L,
-                    "minOrderAmount" to 15.0,
+                    "minOrderAmount" to 249.0,
                     "active" to true,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
@@ -584,11 +620,11 @@ class MenuRepository(
                 mapOf(
                     "code" to "TFC20",
                     "title" to "20% Off Signature Buckets & Burgers",
-                    "description" to "Save 20% up to $8.00 on orders over $15.00.",
+                    "description" to "Save 20% up to ₹150 on orders over ₹299.",
                     "discountType" to "PERCENT",
                     "discountValue" to 20.0,
-                    "minOrderAmount" to 15.0,
-                    "maxDiscount" to 8.0,
+                    "minOrderAmount" to 299.0,
+                    "maxDiscount" to 150.0,
                     "active" to true,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()

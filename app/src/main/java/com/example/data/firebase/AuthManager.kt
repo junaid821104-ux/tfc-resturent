@@ -14,13 +14,9 @@ import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
 import com.google.firebase.Firebase
-import com.google.firebase.FirebaseException
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
-import com.google.firebase.auth.PhoneAuthCredential
-import com.google.firebase.auth.PhoneAuthOptions
-import com.google.firebase.auth.PhoneAuthProvider
 import com.google.firebase.auth.auth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
@@ -30,7 +26,6 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
-import java.util.concurrent.TimeUnit
 
 internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
     val listener = FirebaseAuth.AuthStateListener { auth ->
@@ -121,63 +116,6 @@ object AuthManager {
                 onAuthError(e.localizedMessage ?: "Sign in failed")
             }
         }
-    }
-
-    fun sendPhoneOtp(
-        activity: Activity,
-        phoneNumberE164: String,
-        resendToken: PhoneAuthProvider.ForceResendingToken?,
-        onCodeSent: (String, PhoneAuthProvider.ForceResendingToken) -> Unit,
-        onAutoVerified: () -> Unit,
-        onError: (String) -> Unit
-    ) {
-        val callbacks = object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
-            override fun onVerificationCompleted(credential: PhoneAuthCredential) {
-                Firebase.auth.signInWithCredential(credential)
-                    .addOnSuccessListener { onAutoVerified() }
-                    .addOnFailureListener { e ->
-                        onError(e.localizedMessage ?: "Phone verification failed")
-                    }
-            }
-
-            override fun onVerificationFailed(e: FirebaseException) {
-                Log.e(TAG, "Phone OTP verification failed", e)
-                val friendly = if (e.message?.contains("OPERATION_NOT_ALLOWED", ignoreCase = true) == true ||
-                    e.message?.contains("not enabled", ignoreCase = true) == true
-                ) {
-                    "Phone OTP provider is not enabled in Firebase Console yet. Please enable Phone Sign-In in Firebase Auth or sign in with Google."
-                } else {
-                    e.localizedMessage ?: "Failed to send OTP"
-                }
-                onError(friendly)
-            }
-
-            override fun onCodeSent(
-                verificationId: String,
-                token: PhoneAuthProvider.ForceResendingToken
-            ) {
-                onCodeSent(verificationId, token)
-            }
-        }
-
-        val builder = PhoneAuthOptions.newBuilder(Firebase.auth)
-            .setPhoneNumber(phoneNumberE164)
-            .setTimeout(60L, TimeUnit.SECONDS)
-            .setActivity(activity)
-            .setCallbacks(callbacks)
-        if (resendToken != null) {
-            builder.setForceResendingToken(resendToken)
-        }
-        PhoneAuthProvider.verifyPhoneNumber(builder.build())
-    }
-
-    suspend fun verifyPhoneOtpCode(verificationId: String, code: String): Result<Unit> = try {
-        val credential = PhoneAuthProvider.getCredential(verificationId, code)
-        Firebase.auth.signInWithCredential(credential).await()
-        Result.success(Unit)
-    } catch (e: Exception) {
-        Log.e(TAG, "OTP code verification failed", e)
-        Result.failure(e)
     }
 
     fun signOut(

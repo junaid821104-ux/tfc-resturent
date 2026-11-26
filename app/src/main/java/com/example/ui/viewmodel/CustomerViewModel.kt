@@ -14,8 +14,10 @@ import com.example.data.model.CartLineItem
 import com.example.data.model.Coupon
 import com.example.data.model.DeliveryZone
 import com.example.data.model.DiscountType
+import com.example.data.model.FoodAddon
 import com.example.data.model.FoodCategory
 import com.example.data.model.FoodItem
+import com.example.data.model.FoodVariant
 import com.example.data.model.ManagerAccount
 import com.example.data.model.Order
 import com.example.data.model.OrderItem
@@ -26,6 +28,7 @@ import com.example.data.model.SavedAddress
 import com.example.data.model.SupportTicket
 import com.example.data.model.UiState
 import com.example.data.model.UserProfile
+import com.example.ui.components.formatCurrency
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
@@ -43,6 +46,13 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.math.min
 import kotlin.math.roundToInt
+
+data class CartSelection(
+    val itemId: String,
+    val selectedVariant: FoodVariant? = null,
+    val selectedAddons: List<FoodAddon> = emptyList(),
+    val quantity: Int
+)
 
 data class CheckoutDraft(
     val orderType: OrderType = OrderType.DELIVERY,
@@ -66,7 +76,10 @@ data class CartSummary(
     val totalAmount: Double = 0.0,
     val itemCount: Int = 0,
     val estimatedMinutes: Long = 25L
-)
+) {
+    fun quantityForItem(itemId: String): Int =
+        lines.filter { it.foodItem.effectiveId == itemId }.sumOf { it.quantity }
+}
 
 class CustomerViewModel(
     private val menuRepository: MenuRepository,
@@ -81,6 +94,9 @@ class CustomerViewModel(
 
     private val _isPlacingOrder = MutableStateFlow(false)
     val isPlacingOrder = _isPlacingOrder.asStateFlow()
+
+    private val _isSavingProfile = MutableStateFlow(false)
+    val isSavingProfile = _isSavingProfile.asStateFlow()
 
     val categories: StateFlow<UiState<List<FoodCategory>>> =
         menuRepository.observeCategories().toUiStateFlow("Failed to load categories")
@@ -105,15 +121,12 @@ class CustomerViewModel(
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), RestaurantSettings())
 
+    val userProfileState: StateFlow<UiState<UserProfile?>> =
+        userRepository.observeUserProfile(currentUserId).toUiStateFlow("Failed to load profile")
+
     val userProfile: StateFlow<UserProfile?> =
-        userRepository.observeUserProfile(currentUserId)
-            .catch { error ->
-                val firestoreError = generateSequence(error) { it.cause }
-                    .filterIsInstance<FirebaseFirestoreException>()
-                    .firstOrNull()
-                if (firestoreError == null && error is CancellationException) throw error
-                emit(null)
-            }
+        userProfileState
+            .map { (it as? UiState.Success)?.data }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
 
     val addresses: StateFlow<UiState<List<SavedAddress>>> =
@@ -137,8 +150,7 @@ class CustomerViewModel(
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
 
     val isSuperAdmin: StateFlow<Boolean> =
-        userRepository.observeMyAdminRecord(currentUserId)
-            .map { adminDoc -> adminDoc != null || userRepository.isBootstrappedSuperAdmin() }
+        userRepository.observeIsOwner(currentUserId)
             .catch { error ->
                 val firestoreError = generateSequence(error) { it.cause }
                     .filterIsInstance<FirebaseFirestoreException>()
@@ -152,22 +164,35 @@ class CustomerViewModel(
                 userRepository.isBootstrappedSuperAdmin()
             )
 
-    private val _cartQuantities = MutableStateFlow<Map<String, Int>>(emptyMap())
+    private val _cartSelections = MutableStateFlow<Map<String, CartSelection>>(emptyMap())
     private val _checkoutDraft = MutableStateFlow(CheckoutDraft())
     val checkoutDraft = _checkoutDraft.asStateFlow()
 
     val cartSummary: StateFlow<CartSummary> = combine(
-        _cartQuantities,
+        _cartSelections,
         foodItems,
         _checkoutDraft,
         deliveryZones,
         settings
-    ) { quantities, itemsState, draft, zonesState, restSettings ->
+    ) { selections, itemsState, draft, zonesState, restSettings ->
         val allItems = (itemsState as? UiState.Success)?.data ?: emptyList()
-        val itemMap = allItems.associateBy { it.id }
-        val lines = quantities.entries.mapNotNull { (id, qty) ->
-            val item = itemMap[id]
-            if (item != null && qty > 0 && item.available) CartLineItem(item, qty) else null
+        val itemMap = allItems.associateBy { it.effectiveId }
+        val lines = selections.values.mapNotNull { sel ->
+            val item = itemMap[sel.itemId]
+            if (item != null && sel.quantity > 0 && item.isAvailable) {
+                val resolvedVariant = sel.selectedVariant?.let { sv ->
+                    item.variants.firstOrNull { it.name == sv.name } ?: sv
+                }
+                val resolvedAddons = sel.selectedAddons.map { sa ->
+                    item.addons.firstOrNull { it.name == sa.name } ?: sa
+                }
+                CartLineItem(
+                    foodItem = item,
+                    quantity = sel.quantity,
+                    selectedVariant = resolvedVariant,
+                    selectedAddons = resolvedAddons
+                )
+            } else null
         }
         val subtotal = lines.sumOf { it.lineTotal }.round2()
         val coupon = draft.appliedCoupon?.takeIf { it.active && subtotal >= it.minOrderAmount }
@@ -222,38 +247,71 @@ class CustomerViewModel(
                 emit(UiState.Error(root.toReadableFirestoreMessage("Failed to track order")))
             }
 
-    fun addToCart(item: FoodItem, quantity: Int = 1) {
-        if (!item.available) {
+    private fun selectionKey(
+        itemId: String,
+        variant: FoodVariant?,
+        addons: List<FoodAddon>
+    ): String {
+        val vKey = variant?.name?.trim().orEmpty()
+        val aKey = addons.map { it.name.trim() }.sorted().joinToString(",")
+        return "$itemId|$vKey|$aKey"
+    }
+
+    fun addToCart(
+        item: FoodItem,
+        quantity: Int = 1,
+        selectedVariant: FoodVariant? = item.variants.firstOrNull(),
+        selectedAddons: List<FoodAddon> = emptyList()
+    ) {
+        if (!item.isAvailable) {
             viewModelScope.launch { _events.emit("${item.name} is currently out of stock") }
             return
         }
-        _cartQuantities.update { current ->
-            val next = (current[item.id] ?: 0) + quantity
-            current + (item.id to next.coerceAtMost(50))
+        val itemId = item.effectiveId
+        val key = selectionKey(itemId, selectedVariant, selectedAddons)
+        _cartSelections.update { current ->
+            val existingQty = current[key]?.quantity ?: 0
+            val nextQty = (existingQty + quantity).coerceAtMost(50)
+            current + (key to CartSelection(itemId, selectedVariant, selectedAddons, nextQty))
         }
         viewModelScope.launch { _events.emit("Added ${item.name} to cart") }
     }
 
-    fun incrementItem(itemId: String) {
-        _cartQuantities.update { current ->
-            val next = ((current[itemId] ?: 0) + 1).coerceAtMost(50)
-            current + (itemId to next)
+    fun incrementCartKey(cartKey: String) {
+        _cartSelections.update { current ->
+            val existing = current[cartKey] ?: return@update current
+            current + (cartKey to existing.copy(quantity = (existing.quantity + 1).coerceAtMost(50)))
         }
     }
 
-    fun decrementItem(itemId: String) {
-        _cartQuantities.update { current ->
-            val next = (current[itemId] ?: 0) - 1
-            if (next <= 0) current - itemId else current + (itemId to next)
+    fun decrementCartKey(cartKey: String) {
+        _cartSelections.update { current ->
+            val existing = current[cartKey] ?: return@update current
+            val next = existing.quantity - 1
+            if (next <= 0) current - cartKey else current + (cartKey to existing.copy(quantity = next))
         }
     }
 
-    fun removeFromCart(itemId: String) {
-        _cartQuantities.update { it - itemId }
+    fun incrementFirstLineForItem(itemId: String) {
+        val matching = _cartSelections.value.entries.firstOrNull { it.value.itemId == itemId }
+        if (matching != null) {
+            incrementCartKey(matching.key)
+        }
+    }
+
+    fun decrementFirstLineForItem(itemId: String) {
+        val matching = _cartSelections.value.entries.lastOrNull { it.value.itemId == itemId }
+        if (matching != null) {
+            decrementCartKey(matching.key)
+        }
+    }
+
+    fun removeFromCart(cartKey: String) {
+        _cartSelections.update { it - cartKey }
     }
 
     fun clearCart() {
-        _cartQuantities.value = emptyMap()
+        _cartSelections.value = emptyMap()
         _checkoutDraft.update { it.copy(cookingInstructions = "", appliedCoupon = null) }
     }
 
@@ -319,7 +377,7 @@ class CustomerViewModel(
         val subtotal = cartSummary.value.subtotal
         if (subtotal < match.minOrderAmount) {
             viewModelScope.launch {
-                _events.emit("Minimum order of $${"%.2f".format(match.minOrderAmount)} required for ${match.code}")
+                _events.emit("Minimum order of ${formatCurrency(match.minOrderAmount)} required for ${match.code}")
             }
             return
         }
@@ -333,17 +391,24 @@ class CustomerViewModel(
 
     fun reorderFromOrder(order: Order) {
         val allItems = (foodItems.value as? UiState.Success)?.data ?: emptyList()
-        val availableIds = allItems.filter { it.available }.map { it.id }.toSet()
-        val nextMap = mutableMapOf<String, Int>()
+        val availableItems = allItems.filter { it.isAvailable }.associateBy { it.effectiveId }
+        val nextMap = mutableMapOf<String, CartSelection>()
         order.items.forEach { line ->
-            if (line.itemId in availableIds) {
-                nextMap[line.itemId] = line.quantity.toInt().coerceIn(1, 50)
+            val live = availableItems[line.itemId]
+            if (live != null) {
+                val variant = live.variants.firstOrNull { it.name == line.variantName }
+                val key = selectionKey(live.effectiveId, variant, emptyList())
+                nextMap[key] = CartSelection(
+                    itemId = live.effectiveId,
+                    selectedVariant = variant,
+                    quantity = line.quantity.toInt().coerceIn(1, 50)
+                )
             }
         }
         if (nextMap.isEmpty()) {
             viewModelScope.launch { _events.emit("None of those items are currently available") }
         } else {
-            _cartQuantities.value = nextMap
+            _cartSelections.value = nextMap
             viewModelScope.launch { _events.emit("Order items added to cart") }
         }
     }
@@ -362,7 +427,7 @@ class CustomerViewModel(
         }
         if (summary.subtotal < restSettings.minimumOrderAmount) {
             viewModelScope.launch {
-                _events.emit("Minimum order amount is $${"%.2f".format(restSettings.minimumOrderAmount)}")
+                _events.emit("Minimum order amount is ${formatCurrency(restSettings.minimumOrderAmount)}")
             }
             return
         }
@@ -397,7 +462,7 @@ class CustomerViewModel(
             }
             if (activeZone != null && summary.subtotal < activeZone.minOrderAmount) {
                 viewModelScope.launch {
-                    _events.emit("${activeZone.name} requires a minimum order of $${"%.2f".format(activeZone.minOrderAmount)}")
+                    _events.emit("${activeZone.name} requires a minimum order of ${formatCurrency(activeZone.minOrderAmount)}")
                 }
                 return
             }
@@ -428,19 +493,21 @@ class CustomerViewModel(
                 }
             }
 
-            val orderItems = summary.lines.map {
+            val orderItems = summary.lines.map { line ->
                 OrderItem(
-                    itemId = it.foodItem.id,
-                    name = it.foodItem.name,
-                    price = it.foodItem.effectivePrice,
-                    quantity = it.quantity.toLong(),
-                    imageUrl = it.foodItem.imageUrl,
-                    vegType = it.foodItem.vegType
+                    itemId = line.foodItem.effectiveId,
+                    name = line.foodItem.name,
+                    price = line.unitPrice,
+                    quantity = line.quantity.toLong(),
+                    imageUrl = line.foodItem.imageUrl,
+                    vegType = line.foodItem.foodType,
+                    variantName = line.selectedVariant?.name.orEmpty(),
+                    addonsSummary = line.selectedAddons.joinToString(", ") { it.name }
                 )
             }
             val result = orderRepository.placeOrder(
-                customerName = profile?.displayName ?: "TFC Customer",
-                customerPhone = profile?.phone ?: "",
+                customerName = profile?.effectiveName?.ifBlank { "TFC Customer" } ?: "TFC Customer",
+                customerPhone = profile?.effectivePhone ?: "",
                 customerEmail = profile?.email ?: "",
                 orderType = draft.orderType,
                 items = orderItems,
@@ -514,9 +581,26 @@ class CustomerViewModel(
         }
     }
 
+    fun completeProfile(fullName: String, tenDigitIndianMobile: String, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            _isSavingProfile.value = true
+            val res = userRepository.updateUserProfile(fullName, tenDigitIndianMobile)
+            _isSavingProfile.value = false
+            res.fold(
+                onSuccess = {
+                    _events.emit("Profile saved! Welcome to TFC Restaurant.")
+                    onDone()
+                },
+                onFailure = { _events.emit(it.toReadableFirestoreMessage("Could not save profile")) }
+            )
+        }
+    }
+
     fun updateProfile(name: String, phone: String) {
         viewModelScope.launch {
+            _isSavingProfile.value = true
             val res = userRepository.updateUserProfile(name, phone)
+            _isSavingProfile.value = false
             res.fold(
                 onSuccess = { _events.emit("Profile updated") },
                 onFailure = { _events.emit(it.toReadableFirestoreMessage("Could not update profile")) }

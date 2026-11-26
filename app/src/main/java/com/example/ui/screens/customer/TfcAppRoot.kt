@@ -1,7 +1,12 @@
 package com.example.ui.screens.customer
 
+import android.Manifest
 import android.app.Application
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
@@ -49,6 +54,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -66,8 +72,13 @@ import com.example.data.firebase.AuthManager
 import com.example.data.firebase.MenuRepository
 import com.example.data.firebase.OrderRepository
 import com.example.data.firebase.UserRepository
+import com.example.data.model.LoginRole
+import com.example.data.model.UiState
+import com.example.notifications.OrderAlarmPlayer
+import com.example.notifications.OrderAlertManager
+import com.example.ui.components.LoadingView
 import com.example.ui.screens.auth.LoginScreen
-import com.example.ui.screens.auth.PhoneOtpScreen
+import com.example.ui.screens.auth.ProfileCompletionScreen
 import com.example.ui.screens.auth.SplashScreen
 import com.example.ui.screens.staff.AdminDashboardScreen
 import com.example.ui.screens.staff.ManagerDashboardScreen
@@ -115,20 +126,26 @@ private val bottomTabs = listOf(
 )
 
 @Composable
-fun TfcAppRoot() {
+fun TfcAppRoot(
+    openOwnerOrdersRequest: Boolean = false,
+    notificationLaunchToken: Int = 0,
+    onConsumeOwnerOrdersRequest: () -> Unit = {}
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
 
     var showSplash by remember { mutableStateOf(true) }
-    var showPhoneOtp by remember { mutableStateOf(false) }
-    var currentUser by remember { mutableStateOf(Firebase.auth.currentUser) }
+    var intendedPortal by remember { mutableStateOf<LoginRole?>(null) }
+    var verifiedUser by remember { mutableStateOf(Firebase.auth.currentUser) }
 
     DisposableEffect(Unit) {
         val listener = FirebaseAuth.AuthStateListener { auth ->
-            currentUser = auth.currentUser
-            if (auth.currentUser != null) {
-                showPhoneOtp = false
+            if (auth.currentUser == null && verifiedUser != null) {
+                OrderAlertManager.stopService(context)
+                OrderAlertManager.reset()
+                verifiedUser = null
+                intendedPortal = null
             }
         }
         Firebase.auth.addAuthStateListener(listener)
@@ -136,13 +153,18 @@ fun TfcAppRoot() {
     }
 
     LaunchedEffect(Unit) {
-        AuthManager.attemptAutoSignIn(
-            context = context,
-            credentialManager = credentialManager,
-            scope = scope,
-            onAuthSuccess = { currentUser = Firebase.auth.currentUser },
-            onUnauthenticated = { }
-        )
+        if (Firebase.auth.currentUser == null) {
+            AuthManager.attemptAutoSignIn(
+                context = context,
+                credentialManager = credentialManager,
+                scope = scope,
+                onAuthSuccess = {
+                    intendedPortal = null
+                    verifiedUser = Firebase.auth.currentUser
+                },
+                onUnauthenticated = { }
+            )
+        }
     }
 
     if (showSplash) {
@@ -150,27 +172,29 @@ fun TfcAppRoot() {
         return
     }
 
-    val user = currentUser
+    val user = verifiedUser
     if (user == null) {
-        if (showPhoneOtp) {
-            PhoneOtpScreen(
-                onBack = { showPhoneOtp = false },
-                onAuthSuccess = { currentUser = Firebase.auth.currentUser }
-            )
-        } else {
-            LoginScreen(
-                onAuthSuccess = { currentUser = Firebase.auth.currentUser },
-                onNavigateToPhoneOtp = { showPhoneOtp = true }
-            )
-        }
+        LoginScreen(
+            onAuthSuccess = { role ->
+                intendedPortal = role
+                verifiedUser = Firebase.auth.currentUser
+            }
+        )
     } else {
         val uid = user.uid
         key(uid) {
             AuthenticatedTfcShell(
                 currentUserId = uid,
+                initialPortal = intendedPortal,
+                openOwnerOrdersRequest = openOwnerOrdersRequest,
+                notificationLaunchToken = notificationLaunchToken,
+                onConsumeOwnerOrdersRequest = onConsumeOwnerOrdersRequest,
                 onSignOut = {
+                    OrderAlertManager.stopService(context)
+                    OrderAlertManager.reset()
                     AuthManager.signOut(credentialManager, scope) {
-                        currentUser = null
+                        intendedPortal = null
+                        verifiedUser = null
                     }
                 }
             )
@@ -181,6 +205,10 @@ fun TfcAppRoot() {
 @Composable
 private fun AuthenticatedTfcShell(
     currentUserId: String,
+    initialPortal: LoginRole?,
+    openOwnerOrdersRequest: Boolean,
+    notificationLaunchToken: Int,
+    onConsumeOwnerOrdersRequest: () -> Unit,
     onSignOut: () -> Unit
 ) {
     val customerViewModel: CustomerViewModel = viewModel(
@@ -230,7 +258,9 @@ private fun AuthenticatedTfcShell(
     val couponsState by customerViewModel.coupons.collectAsStateWithLifecycle()
     val zonesState by customerViewModel.deliveryZones.collectAsStateWithLifecycle()
     val settings by customerViewModel.settings.collectAsStateWithLifecycle()
+    val userProfileState by customerViewModel.userProfileState.collectAsStateWithLifecycle()
     val userProfile by customerViewModel.userProfile.collectAsStateWithLifecycle()
+    val isSavingProfile by customerViewModel.isSavingProfile.collectAsStateWithLifecycle()
     val addressesState by customerViewModel.addresses.collectAsStateWithLifecycle()
     val myOrdersState by customerViewModel.myOrders.collectAsStateWithLifecycle()
     val ticketsState by customerViewModel.supportTickets.collectAsStateWithLifecycle()
@@ -244,6 +274,110 @@ private fun AuthenticatedTfcShell(
     val allManagersState by staffViewModel.allManagers.collectAsStateWithLifecycle()
     val allUsersState by staffViewModel.allUsers.collectAsStateWithLifecycle()
     val allTicketsState by staffViewModel.allSupportTickets.collectAsStateWithLifecycle()
+
+    val context = LocalContext.current
+    val isAlarmPlaying by OrderAlarmPlayer.isPlaying.collectAsStateWithLifecycle()
+
+    var hasNotificationPermission by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
+            } else {
+                true
+            }
+        )
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasNotificationPermission = granted
+        if (granted && isSuperAdmin) {
+            OrderAlertManager.startServiceSafely(context)
+        }
+    }
+
+    LaunchedEffect(isSuperAdmin, hasNotificationPermission) {
+        if (isSuperAdmin) {
+            OrderAlertManager.ensureChannels(context)
+            OrderAlertManager.startServiceSafely(context)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        } else {
+            OrderAlertManager.stopService(context)
+        }
+    }
+
+    LaunchedEffect(isSuperAdmin, allOrdersState) {
+        if (isSuperAdmin && allOrdersState is UiState.Success) {
+            val orders = (allOrdersState as UiState.Success).data
+            OrderAlertManager.handleLiveOrdersUpdate(
+                context = context,
+                orders = orders,
+                triggerAlarmAndNotification = true
+            )
+        }
+    }
+
+    val firebaseUser = Firebase.auth.currentUser
+    val profileLoaded = userProfileState is UiState.Success || userProfileState is UiState.Error
+    val needsProfileCompletion = profileLoaded && (userProfile == null || !userProfile!!.isProfileCompleted)
+
+    if (!profileLoaded) {
+        LoadingView("Loading your TFC profile...")
+        return
+    }
+
+    if (needsProfileCompletion) {
+        val resolvedRole = when {
+            isSuperAdmin -> LoginRole.OWNER
+            myManagerRecord?.active == true -> LoginRole.MANAGER
+            else -> LoginRole.CUSTOMER
+        }
+        ProfileCompletionScreen(
+            userProfile = userProfile,
+            fallbackName = firebaseUser?.displayName.orEmpty(),
+            fallbackEmail = firebaseUser?.email.orEmpty(),
+            fallbackPhotoUrl = firebaseUser?.photoUrl?.toString().orEmpty(),
+            role = resolvedRole,
+            isSaving = isSavingProfile,
+            onSaveProfile = { name, digits ->
+                customerViewModel.completeProfile(name, digits)
+            },
+            onSignOut = onSignOut
+        )
+        return
+    }
+
+    var didAutoRoute by remember(currentUserId, initialPortal) { mutableStateOf(false) }
+    LaunchedEffect(initialPortal, isSuperAdmin, myManagerRecord, didAutoRoute, needsProfileCompletion) {
+        if (!didAutoRoute && !needsProfileCompletion) {
+            when {
+                isSuperAdmin && (initialPortal == null || initialPortal == LoginRole.OWNER) -> {
+                    didAutoRoute = true
+                    navController.navigate(Routes.ADMIN_DASHBOARD) { launchSingleTop = true }
+                }
+                myManagerRecord?.active == true && (initialPortal == null || initialPortal == LoginRole.MANAGER) -> {
+                    didAutoRoute = true
+                    navController.navigate(Routes.MANAGER_DASHBOARD) { launchSingleTop = true }
+                }
+                initialPortal == LoginRole.CUSTOMER -> {
+                    didAutoRoute = true
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(openOwnerOrdersRequest, notificationLaunchToken, isSuperAdmin, needsProfileCompletion) {
+        if (openOwnerOrdersRequest && isSuperAdmin && !needsProfileCompletion) {
+            OrderAlarmPlayer.stop()
+            navController.navigate(Routes.ADMIN_DASHBOARD) { launchSingleTop = true }
+            onConsumeOwnerOrdersRequest()
+        }
+    }
 
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
@@ -389,8 +523,8 @@ private fun AuthenticatedTfcShell(
                                     }
                                 },
                                 onAddToCart = { customerViewModel.addToCart(it) },
-                                onIncrement = { customerViewModel.incrementItem(it) },
-                                onDecrement = { customerViewModel.decrementItem(it) },
+                                onIncrement = { customerViewModel.incrementFirstLineForItem(it) },
+                                onDecrement = { customerViewModel.decrementFirstLineForItem(it) },
                                 onApplyCoupon = { customerViewModel.applyCouponCode(it) }
                             )
                         }
@@ -404,8 +538,8 @@ private fun AuthenticatedTfcShell(
                                     navController.navigate("food_detail/${Uri.encode(itemId)}")
                                 },
                                 onAddToCart = { customerViewModel.addToCart(it) },
-                                onIncrement = { customerViewModel.incrementItem(it) },
-                                onDecrement = { customerViewModel.decrementItem(it) }
+                                onIncrement = { customerViewModel.incrementFirstLineForItem(it) },
+                                onDecrement = { customerViewModel.decrementFirstLineForItem(it) }
                             )
                         }
 
@@ -437,8 +571,8 @@ private fun AuthenticatedTfcShell(
                                 checkoutDraft = checkoutDraft,
                                 settings = settings,
                                 couponsState = couponsState,
-                                onIncrement = { customerViewModel.incrementItem(it) },
-                                onDecrement = { customerViewModel.decrementItem(it) },
+                                onIncrement = { customerViewModel.incrementCartKey(it) },
+                                onDecrement = { customerViewModel.decrementCartKey(it) },
                                 onRemove = { customerViewModel.removeFromCart(it) },
                                 onCookingInstructionsChange = { customerViewModel.updateCookingInstructions(it) },
                                 onApplyCoupon = { customerViewModel.applyCouponCode(it) },
@@ -485,8 +619,8 @@ private fun AuthenticatedTfcShell(
                                     navController.navigate("food_detail/${Uri.encode(itemId)}")
                                 },
                                 onAddToCart = { customerViewModel.addToCart(it) },
-                                onIncrement = { customerViewModel.incrementItem(it) },
-                                onDecrement = { customerViewModel.decrementItem(it) }
+                                onIncrement = { customerViewModel.incrementFirstLineForItem(it) },
+                                onDecrement = { customerViewModel.decrementFirstLineForItem(it) }
                             )
                         }
 
@@ -499,7 +633,9 @@ private fun AuthenticatedTfcShell(
                                 itemId = itemId,
                                 foodItemsState = foodItemsState,
                                 onBack = { navController.popBackStack() },
-                                onAddToCart = { item, qty -> customerViewModel.addToCart(item, qty) }
+                                onAddToCart = { item, qty, variant, addons ->
+                                    customerViewModel.addToCart(item, qty, variant, addons)
+                                }
                             )
                         }
 
@@ -592,7 +728,6 @@ private fun AuthenticatedTfcShell(
                                 managerRecord = myManagerRecord,
                                 isSuperAdmin = isSuperAdmin,
                                 ordersState = allOrdersState,
-                                categoriesState = categoriesState,
                                 foodItemsState = foodItemsState,
                                 onBack = { navController.popBackStack() },
                                 onUpdateOrderStatus = { id, status, reason, pay ->
@@ -600,9 +735,6 @@ private fun AuthenticatedTfcShell(
                                 },
                                 onToggleFoodStock = { id, avail ->
                                     staffViewModel.toggleFoodAvailability(id, avail)
-                                },
-                                onSaveFoodItem = { item, done ->
-                                    staffViewModel.saveFoodItem(item, done)
                                 }
                             )
                         }
@@ -619,10 +751,26 @@ private fun AuthenticatedTfcShell(
                                 managersState = allManagersState,
                                 usersState = allUsersState,
                                 ticketsState = allTicketsState,
+                                isAlarmPlaying = isAlarmPlaying,
+                                hasNotificationPermission = hasNotificationPermission,
+                                openOrdersToken = notificationLaunchToken,
+                                onSilenceAlarm = { OrderAlarmPlayer.stop() },
+                                onRequestNotificationPermission = {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    }
+                                },
                                 onBack = { navController.popBackStack() },
-                                onInitializeStarterCatalog = { staffViewModel.initializeStarterCatalog() },
-                                onUpdateOrderStatus = { id, status ->
-                                    staffViewModel.updateOrderStatus(id, status)
+                                onInitializeStarterCatalog = {
+                                    staffViewModel.initializeStarterCatalog()
+                                },
+                                onUpdateOrderStatus = { id, status, reason, pay ->
+                                    OrderAlarmPlayer.stop()
+                                    OrderAlertManager.cancelOrderNotification(context, id)
+                                    staffViewModel.updateOrderStatus(id, status, reason, pay)
+                                },
+                                onToggleFoodStock = { id, avail ->
+                                    staffViewModel.toggleFoodAvailability(id, avail)
                                 },
                                 onSaveCategory = { cat, done -> staffViewModel.saveCategory(cat, done) },
                                 onDeleteCategory = { staffViewModel.deleteCategory(it) },

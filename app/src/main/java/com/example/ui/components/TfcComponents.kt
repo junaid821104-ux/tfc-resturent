@@ -1,6 +1,8 @@
 package com.example.ui.components
 
+import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -12,6 +14,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,6 +29,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Image
@@ -45,12 +50,19 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -61,6 +73,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.R
+import com.example.data.firebase.ImageUploadHelper
 import com.example.data.model.FoodItem
 import com.example.data.model.OrderStatus
 import com.example.data.model.VegType
@@ -73,10 +86,18 @@ import com.example.ui.theme.TfcSoftRed
 import com.example.ui.theme.TfcSuccessGreen
 import com.example.ui.theme.TfcVegGreen
 import com.example.ui.theme.TfcWarningAmber
+import kotlinx.coroutines.launch
 import java.util.Locale
+import kotlin.math.abs
 
-fun formatCurrency(amount: Double): String =
-    String.format(Locale.US, "$%.2f", amount)
+fun formatCurrency(amount: Double): String {
+    val rounded = kotlin.math.round(amount * 100.0) / 100.0
+    return if (abs(rounded % 1.0) < 0.005) {
+        "₹${rounded.toLong()}"
+    } else {
+        String.format(Locale.US, "₹%.2f", rounded)
+    }
+}
 
 @Composable
 fun TfcLogoBadge(
@@ -154,35 +175,62 @@ fun FoodPhoto(
     contentDescription: String,
     modifier: Modifier = Modifier
 ) {
-    val localDrawable = when (imageUrl.trim()) {
+    val trimmed = imageUrl.trim()
+    val localDrawable = when (trimmed) {
         "local://img_crispy_bucket" -> R.drawable.img_crispy_bucket
         "local://img_burger_deluxe" -> R.drawable.img_burger_deluxe
         "local://img_hero_banner" -> R.drawable.img_hero_banner
         else -> null
     }
-    if (localDrawable != null) {
-        Image(
-            painter = painterResource(id = localDrawable),
-            contentDescription = contentDescription,
-            modifier = modifier,
-            contentScale = ContentScale.Crop
-        )
-    } else if (imageUrl.isNotBlank()) {
-        AsyncImage(
-            model = imageUrl,
-            contentDescription = contentDescription,
-            modifier = modifier,
-            contentScale = ContentScale.Crop,
-            placeholder = painterResource(id = R.drawable.img_hero_banner),
-            error = painterResource(id = R.drawable.img_hero_banner)
-        )
-    } else {
-        Image(
-            painter = painterResource(id = R.drawable.img_crispy_bucket),
-            contentDescription = contentDescription,
-            modifier = modifier,
-            contentScale = ContentScale.Crop
-        )
+    val decodedBitmap = remember(trimmed) {
+        if (trimmed.startsWith("data:image/")) {
+            try {
+                val base64Part = trimmed.substringAfter("base64,", "")
+                if (base64Part.isNotEmpty()) {
+                    val bytes = Base64.decode(base64Part, Base64.DEFAULT)
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                } else null
+            } catch (_: Exception) {
+                null
+            }
+        } else null
+    }
+
+    when {
+        localDrawable != null -> {
+            Image(
+                painter = painterResource(id = localDrawable),
+                contentDescription = contentDescription,
+                modifier = modifier,
+                contentScale = ContentScale.Crop
+            )
+        }
+        decodedBitmap != null -> {
+            Image(
+                bitmap = decodedBitmap,
+                contentDescription = contentDescription,
+                modifier = modifier,
+                contentScale = ContentScale.Crop
+            )
+        }
+        trimmed.isNotBlank() -> {
+            AsyncImage(
+                model = trimmed,
+                contentDescription = contentDescription,
+                modifier = modifier,
+                contentScale = ContentScale.Crop,
+                placeholder = painterResource(id = R.drawable.img_hero_banner),
+                error = painterResource(id = R.drawable.img_hero_banner)
+            )
+        }
+        else -> {
+            Image(
+                painter = painterResource(id = R.drawable.img_crispy_bucket),
+                contentDescription = contentDescription,
+                modifier = modifier,
+                contentScale = ContentScale.Crop
+            )
+        }
     }
 }
 
@@ -196,11 +244,12 @@ fun FoodItemCard(
     onDecrement: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val itemId = item.effectiveId
     Card(
         modifier = modifier
             .fillMaxWidth()
             .clickable(onClick = onCardClick)
-            .testTag("food_card_${item.id}"),
+            .testTag("food_card_$itemId"),
         shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
@@ -223,7 +272,7 @@ fun FoodItemCard(
                     contentDescription = item.name,
                     modifier = Modifier.fillMaxSize()
                 )
-                if (!item.available) {
+                if (!item.isAvailable) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -266,15 +315,15 @@ fun FoodItemCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    VegTypeBadge(vegTypeRaw = item.vegType)
+                    VegTypeBadge(vegTypeRaw = item.foodType)
                     Text(
-                        text = item.categoryName,
+                        text = item.effectiveCategory,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    if (item.popular) {
+                    if (item.isPopular) {
                         Icon(
                             imageVector = Icons.Default.LocalFireDepartment,
                             contentDescription = "Popular item",
@@ -298,6 +347,19 @@ fun FoodItemCard(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
+
+                if (item.variants.isNotEmpty() || item.addons.isNotEmpty()) {
+                    Text(
+                        text = buildList {
+                            if (item.variants.isNotEmpty()) add("${item.variants.size} sizes")
+                            if (item.addons.isNotEmpty()) add("${item.addons.size} add-ons")
+                        }.joinToString(" • "),
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            color = TfcCrimson,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                }
 
                 Row(
                     modifier = Modifier
@@ -346,7 +408,7 @@ fun FoodItemCard(
                         }
                     }
 
-                    if (!item.available) {
+                    if (!item.isAvailable) {
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             shape = RoundedCornerShape(10.dp)
@@ -363,7 +425,7 @@ fun FoodItemCard(
                             quantity = cartQuantity,
                             onIncrement = onIncrement,
                             onDecrement = onDecrement,
-                            tagPrefix = item.id
+                            tagPrefix = itemId
                         )
                     } else {
                         Button(
@@ -373,7 +435,7 @@ fun FoodItemCard(
                             colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson),
                             modifier = Modifier
                                 .minimumInteractiveComponentSize()
-                                .testTag("add_to_cart_${item.id}")
+                                .testTag("add_to_cart_$itemId")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Add,
@@ -656,60 +718,171 @@ fun ErrorStateView(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun FoodImageInputField(
     imageUrl: String,
     onImageUrlChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val photoPickerLauncher = rememberLauncherForActivityResult(
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var isProcessing by remember { mutableStateOf(false) }
+    var imageError by remember { mutableStateOf<String?>(null) }
+    var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
+
+    val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            onImageUrlChange(uri.toString())
+            isProcessing = true
+            imageError = null
+            scope.launch {
+                val res = ImageUploadHelper.compressUriToDataUrl(context, uri)
+                isProcessing = false
+                res.fold(
+                    onSuccess = { onImageUrlChange(it) },
+                    onFailure = { imageError = it.localizedMessage ?: "Failed to process gallery image" }
+                )
+            }
+        }
+    }
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { saved ->
+        val uri = pendingCameraUri
+        if (saved && uri != null) {
+            isProcessing = true
+            imageError = null
+            scope.launch {
+                val res = ImageUploadHelper.compressUriToDataUrl(context, uri)
+                isProcessing = false
+                res.fold(
+                    onSuccess = { onImageUrlChange(it) },
+                    onFailure = { imageError = it.localizedMessage ?: "Failed to process captured photo" }
+                )
+            }
         }
     }
 
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        OutlinedTextField(
-            value = imageUrl,
-            onValueChange = onImageUrlChange,
-            label = { Text("Image URL or Photo URI") },
-            placeholder = { Text("https://... or local://img_burger_deluxe") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
         Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            OutlinedButton(
-                onClick = {
-                    photoPickerLauncher.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                    )
-                },
-                modifier = Modifier.minimumInteractiveComponentSize()
+            Box(
+                modifier = Modifier
+                    .size(72.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp)),
+                contentAlignment = Alignment.Center
             ) {
-                Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Pick Photo")
+                FoodPhoto(
+                    imageUrl = imageUrl,
+                    contentDescription = "Food preview",
+                    modifier = Modifier.fillMaxSize()
+                )
+                if (isProcessing) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(TfcJetBlack.copy(alpha = 0.6f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            color = TfcPureWhite,
+                            strokeWidth = 2.dp
+                        )
+                    }
+                }
             }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Food Dish Photo", style = MaterialTheme.typography.titleSmall)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            galleryLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        enabled = !isProcessing,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("pick_gallery_photo_button")
+                    ) {
+                        Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Gallery")
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            val tempUri = ImageUploadHelper.createCameraTempUri(context)
+                            pendingCameraUri = tempUri
+                            cameraLauncher.launch(tempUri)
+                        },
+                        enabled = !isProcessing,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("capture_camera_photo_button")
+                    ) {
+                        Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Camera")
+                    }
+                }
+            }
+        }
+
+        if (imageError != null) {
+            Text(
+                text = imageError ?: "",
+                style = MaterialTheme.typography.bodySmall,
+                color = TfcCrimson
+            )
+        }
+
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             OutlinedButton(
                 onClick = { onImageUrlChange("local://img_crispy_bucket") },
                 modifier = Modifier.minimumInteractiveComponentSize()
-            ) {
-                Text("Chicken Preset")
-            }
+            ) { Text("Bucket Preset") }
             OutlinedButton(
                 onClick = { onImageUrlChange("local://img_burger_deluxe") },
                 modifier = Modifier.minimumInteractiveComponentSize()
-            ) {
-                Text("Burger Preset")
-            }
+            ) { Text("Burger Preset") }
+            OutlinedButton(
+                onClick = { onImageUrlChange("local://img_hero_banner") },
+                modifier = Modifier.minimumInteractiveComponentSize()
+            ) { Text("Platter Preset") }
+        }
+
+        if (!imageUrl.startsWith("data:image/")) {
+            OutlinedTextField(
+                value = imageUrl,
+                onValueChange = onImageUrlChange,
+                label = { Text("Or paste Image URL") },
+                placeholder = { Text("https://... or local://img_burger_deluxe") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        } else {
+            Text(
+                text = "Custom photo uploaded and ready to save.",
+                style = MaterialTheme.typography.labelSmall,
+                color = TfcSuccessGreen
+            )
         }
     }
 }

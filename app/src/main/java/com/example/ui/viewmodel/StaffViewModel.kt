@@ -56,8 +56,7 @@ class StaffViewModel(
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
 
     val isSuperAdmin: StateFlow<Boolean> =
-        userRepository.observeMyAdminRecord(currentUserId)
-            .map { adminDoc -> adminDoc != null || userRepository.isBootstrappedSuperAdmin() }
+        userRepository.observeIsOwner(currentUserId)
             .catch { error ->
                 val firestoreError = generateSequence(error) { it.cause }
                     .filterIsInstance<FirebaseFirestoreException>()
@@ -72,7 +71,7 @@ class StaffViewModel(
             )
 
     private val canReadAllOrders: Flow<Boolean> = combine(isSuperAdmin, managerRecord) { admin, mgr ->
-        admin || (mgr?.active == true)
+        admin || (mgr?.active == true && (mgr.canViewOrders || mgr.canManageOrders || mgr.canViewSales))
     }
 
     val allOrders: StateFlow<UiState<List<Order>>> =
@@ -259,9 +258,9 @@ class StaffViewModel(
         }
     }
 
-    fun initializeStarterCatalog() {
+    fun initializeStarterCatalog(currentOwnerPhone: String = "") {
         viewModelScope.launch {
-            val res = menuRepository.initializeStarterCatalog()
+            val res = menuRepository.initializeStarterCatalog(currentOwnerPhone)
             res.fold(
                 onSuccess = { _events.emit("TFC Restaurant menu, zones & settings initialized!") },
                 onFailure = { _events.emit(it.toReadableFirestoreMessage("Failed to initialize catalog")) }

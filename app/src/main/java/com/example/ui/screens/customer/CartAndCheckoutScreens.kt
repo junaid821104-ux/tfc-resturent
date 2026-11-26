@@ -154,7 +154,7 @@ fun CartScreen(
                     )
                 }
 
-                items(cartSummary.lines, key = { it.foodItem.id }) { line ->
+                items(cartSummary.lines, key = { it.cartKey }) { line ->
                     Card(
                         shape = MaterialTheme.shapes.medium,
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -179,10 +179,17 @@ fun CartScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    VegTypeBadge(line.foodItem.vegType)
+                                    VegTypeBadge(line.foodItem.foodType)
                                     Text(
                                         text = line.foodItem.name,
                                         style = MaterialTheme.typography.titleSmall
+                                    )
+                                }
+                                if (line.customizationSummary.isNotBlank()) {
+                                    Text(
+                                        text = line.customizationSummary,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                                 Spacer(Modifier.height(4.dp))
@@ -197,12 +204,12 @@ fun CartScreen(
                             Column(horizontalAlignment = Alignment.End) {
                                 QuantityStepper(
                                     quantity = line.quantity,
-                                    onIncrement = { onIncrement(line.foodItem.id) },
-                                    onDecrement = { onDecrement(line.foodItem.id) },
-                                    tagPrefix = "cart_${line.foodItem.id}"
+                                    onIncrement = { onIncrement(line.cartKey) },
+                                    onDecrement = { onDecrement(line.cartKey) },
+                                    tagPrefix = "cart_${line.cartKey}"
                                 )
                                 TextButton(
-                                    onClick = { onRemove(line.foodItem.id) },
+                                    onClick = { onRemove(line.cartKey) },
                                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
                                     Icon(
@@ -780,7 +787,7 @@ fun CheckoutScreen(
                                 }
                                 Surface(color = Color(0xFFDCFCE7), shape = RoundedCornerShape(50)) {
                                     Text(
-                                        text = "Delivery Fee: $0.00",
+                                        text = "Delivery Fee: FREE (₹0)",
                                         style = MaterialTheme.typography.labelSmall.copy(
                                             color = TfcSuccessGreen,
                                             fontWeight = FontWeight.Bold
@@ -902,7 +909,7 @@ fun BillSummaryCard(
             }
             BillRow(
                 label = if (orderType == OrderType.PICKUP) "Delivery Fee (Pickup)" else "Delivery Fee",
-                value = if (cartSummary.deliveryFee == 0.0) "FREE ($0.00)" else formatCurrency(cartSummary.deliveryFee)
+                value = if (cartSummary.deliveryFee == 0.0) "FREE (₹0)" else formatCurrency(cartSummary.deliveryFee)
             )
             BillRow("Estimated Time", "~${cartSummary.estimatedMinutes} mins")
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))

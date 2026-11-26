@@ -11,25 +11,39 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Fastfood
-import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.LocalOffer
+import androidx.compose.material.icons.filled.ManageAccounts
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -37,6 +51,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -44,29 +60,29 @@ import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.data.model.Coupon
 import com.example.data.model.DeliveryZone
-import com.example.data.model.DiscountType
 import com.example.data.model.FoodCategory
 import com.example.data.model.FoodItem
 import com.example.data.model.ManagerAccount
@@ -79,13 +95,28 @@ import com.example.data.model.UiState
 import com.example.data.model.UserProfile
 import com.example.ui.components.EmptyStateView
 import com.example.ui.components.ErrorStateView
+import com.example.ui.components.FoodPhoto
 import com.example.ui.components.LoadingView
 import com.example.ui.components.OrderStatusBadge
+import com.example.ui.components.VegTypeBadge
 import com.example.ui.components.formatCurrency
 import com.example.ui.theme.TfcCrimson
 import com.example.ui.theme.TfcJetBlack
 import com.example.ui.theme.TfcPureWhite
 import com.example.ui.theme.TfcSoftRed
+import com.example.ui.theme.TfcSuccessGreen
+
+enum class OwnerSection(val title: String, val icon: ImageVector) {
+    DASHBOARD("Dashboard", Icons.Default.Dashboard),
+    ORDERS("Orders", Icons.Default.ReceiptLong),
+    FOOD_MENU("Food Menu", Icons.Default.Fastfood),
+    CATEGORIES("Categories", Icons.Default.Category),
+    ADD_FOOD("Add Food", Icons.Default.AddCircle),
+    COUPONS("Coupons", Icons.Default.LocalOffer),
+    MANAGERS("Managers", Icons.Default.ManageAccounts),
+    SALES("Sales", Icons.Default.Analytics),
+    SETTINGS("Restaurant Settings", Icons.Default.Settings)
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -100,9 +131,15 @@ fun AdminDashboardScreen(
     managersState: UiState<List<ManagerAccount>>,
     usersState: UiState<List<UserProfile>>,
     ticketsState: UiState<List<SupportTicket>>,
+    isAlarmPlaying: Boolean,
+    hasNotificationPermission: Boolean,
+    openOrdersToken: Int,
+    onSilenceAlarm: () -> Unit,
+    onRequestNotificationPermission: () -> Unit,
     onBack: () -> Unit,
     onInitializeStarterCatalog: () -> Unit,
-    onUpdateOrderStatus: (String, OrderStatus) -> Unit,
+    onUpdateOrderStatus: (String, OrderStatus, String?, String?) -> Unit,
+    onToggleFoodStock: (String, Boolean) -> Unit,
     onSaveCategory: (FoodCategory, () -> Unit) -> Unit,
     onDeleteCategory: (String) -> Unit,
     onSaveFoodItem: (FoodItem, () -> Unit) -> Unit,
@@ -118,13 +155,22 @@ fun AdminDashboardScreen(
 ) {
     BackHandler { onBack() }
 
-    var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Analytics", "Catalog", "Settings", "Team")
+    var selectedSection by remember { mutableStateOf(OwnerSection.DASHBOARD) }
+    var editingFood by remember { mutableStateOf<FoodItem?>(null) }
+    var showFoodDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(openOrdersToken) {
+        if (openOrdersToken > 0) {
+            selectedSection = OwnerSection.ORDERS
+        }
+    }
+
+    val categories = (categoriesState as? UiState.Success)?.data ?: emptyList()
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("TFC Super Admin") },
+                title = { Text("TFC Owner Dashboard") },
                 navigationIcon = {
                     IconButton(
                         onClick = onBack,
@@ -134,6 +180,22 @@ fun AdminDashboardScreen(
                     ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
+                },
+                actions = {
+                    if (isAlarmPlaying) {
+                        Button(
+                            onClick = onSilenceAlarm,
+                            colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson),
+                            modifier = Modifier
+                                .padding(end = 8.dp)
+                                .minimumInteractiveComponentSize()
+                                .testTag("topbar_silence_alarm_button")
+                        ) {
+                            Icon(Icons.Default.VolumeOff, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Silence")
+                        }
+                    }
                 }
             )
         }
@@ -141,8 +203,8 @@ fun AdminDashboardScreen(
         if (!isSuperAdmin) {
             BoxWithConstraints(Modifier.padding(innerPadding)) {
                 EmptyStateView(
-                    title = "Super Admin Access Only",
-                    subtitle = "This portal is restricted to verified TFC Super Admin accounts."
+                    title = "Restaurant Owner Access Only",
+                    subtitle = "Sign in with the pre-authorized Restaurant Owner Google account."
                 )
             }
             return@Scaffold
@@ -157,382 +219,188 @@ fun AdminDashboardScreen(
             val isWide = maxWidth >= 680.dp
             Row(modifier = Modifier.fillMaxSize()) {
                 if (isWide) {
-                    NavigationRail(modifier = Modifier.fillMaxHeight()) {
-                        NavigationRailItem(
-                            selected = selectedTab == 0,
-                            onClick = { selectedTab = 0 },
-                            icon = { Icon(Icons.Default.Analytics, contentDescription = null) },
-                            label = { Text("Analytics") }
-                        )
-                        NavigationRailItem(
-                            selected = selectedTab == 1,
-                            onClick = { selectedTab = 1 },
-                            icon = { Icon(Icons.Default.Fastfood, contentDescription = null) },
-                            label = { Text("Catalog") }
-                        )
-                        NavigationRailItem(
-                            selected = selectedTab == 2,
-                            onClick = { selectedTab = 2 },
-                            icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                            label = { Text("Settings") }
-                        )
-                        NavigationRailItem(
-                            selected = selectedTab == 3,
-                            onClick = { selectedTab = 3 },
-                            icon = { Icon(Icons.Default.People, contentDescription = null) },
-                            label = { Text("Team") }
-                        )
+                    NavigationRail(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        OwnerSection.entries.forEach { section ->
+                            NavigationRailItem(
+                                selected = selectedSection == section,
+                                onClick = { selectedSection = section },
+                                icon = { Icon(section.icon, contentDescription = section.title) },
+                                label = { Text(section.title, maxLines = 1) }
+                            )
+                        }
                     }
                 }
 
                 Column(modifier = Modifier.weight(1f)) {
                     if (!isWide) {
-                        PrimaryTabRow(selectedTabIndex = selectedTab) {
-                            tabs.forEachIndexed { index, title ->
-                                Tab(
-                                    selected = selectedTab == index,
-                                    onClick = { selectedTab = index },
-                                    text = { Text(title) }
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(OwnerSection.entries, key = { it.name }) { section ->
+                                val selected = selectedSection == section
+                                FilterChip(
+                                    selected = selected,
+                                    onClick = { selectedSection = section },
+                                    label = { Text(section.title) },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = section.icon,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = TfcCrimson,
+                                        selectedLabelColor = TfcPureWhite,
+                                        selectedLeadingIconColor = TfcPureWhite
+                                    ),
+                                    modifier = Modifier
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("owner_section_${section.name.lowercase()}")
                                 )
                             }
                         }
                     }
 
-                    when (selectedTab) {
-                        0 -> AdminAnalyticsAndOrdersTab(
+                    if (isAlarmPlaying) {
+                        Surface(
+                            color = TfcCrimson,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.NotificationsActive, contentDescription = null, tint = TfcPureWhite)
+                                    Text(
+                                        text = "New order alarm ringing!",
+                                        style = MaterialTheme.typography.titleSmall.copy(
+                                            color = TfcPureWhite,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    )
+                                }
+                                OutlinedButton(
+                                    onClick = onSilenceAlarm,
+                                    border = BorderStroke(1.dp, TfcPureWhite),
+                                    modifier = Modifier
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("silence_alarm_button")
+                                ) {
+                                    Text("Silence Alarm", color = TfcPureWhite)
+                                }
+                            }
+                        }
+                    }
+
+                    when (selectedSection) {
+                        OwnerSection.DASHBOARD -> OwnerDashboardHomeSection(
                             ordersState = ordersState,
-                            foodItemsCount = (foodItemsState as? UiState.Success)?.data?.size ?: 0,
-                            onInitializeStarterCatalog = onInitializeStarterCatalog,
-                            onUpdateOrderStatus = onUpdateOrderStatus
-                        )
-                        1 -> AdminCatalogTab(
-                            categoriesState = categoriesState,
                             foodItemsState = foodItemsState,
-                            couponsState = couponsState,
+                            categoriesCount = categories.size,
+                            managersCount = (managersState as? UiState.Success)?.data?.size ?: 0,
+                            hasNotificationPermission = hasNotificationPermission,
+                            onRequestNotificationPermission = onRequestNotificationPermission,
+                            onAddNewFoodClick = { selectedSection = OwnerSection.ADD_FOOD },
+                            onInitializeStarterCatalog = onInitializeStarterCatalog,
+                            onNavigateSection = { selectedSection = it },
+                            onUpdateOrderStatus = onUpdateOrderStatus,
+                            onSilenceAlarm = onSilenceAlarm
+                        )
+                        OwnerSection.ORDERS -> OwnerOrdersSection(
+                            ordersState = ordersState,
+                            onUpdateOrderStatus = onUpdateOrderStatus,
+                            onSilenceAlarm = onSilenceAlarm
+                        )
+                        OwnerSection.FOOD_MENU -> OwnerFoodMenuSection(
+                            foodItemsState = foodItemsState,
+                            onAddNewFood = { selectedSection = OwnerSection.ADD_FOOD },
+                            onEditFood = { item ->
+                                editingFood = item
+                                showFoodDialog = true
+                            },
+                            onToggleStock = onToggleFoodStock,
+                            onDeleteFood = onDeleteFoodItem
+                        )
+                        OwnerSection.CATEGORIES -> OwnerCategoriesSection(
+                            categoriesState = categoriesState,
                             onSaveCategory = onSaveCategory,
-                            onDeleteCategory = onDeleteCategory,
-                            onSaveFoodItem = onSaveFoodItem,
-                            onDeleteFoodItem = onDeleteFoodItem,
+                            onDeleteCategory = onDeleteCategory
+                        )
+                        OwnerSection.ADD_FOOD -> {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .verticalScroll(rememberScrollState())
+                                    .padding(16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .widthIn(max = 640.dp)
+                                        .fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Text("+ ADD NEW FOOD", style = MaterialTheme.typography.headlineMedium, color = TfcCrimson)
+                                    Text(
+                                        "New dishes save directly to Firestore and appear immediately across the TFC Customer App.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    OwnerFoodEditorContent(
+                                        initial = null,
+                                        categories = categories,
+                                        submitButtonLabel = "Save Menu Item",
+                                        resetAfterSave = true,
+                                        onSave = { item, done ->
+                                            onSaveFoodItem(item) {
+                                                done()
+                                                selectedSection = OwnerSection.FOOD_MENU
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        OwnerSection.COUPONS -> OwnerCouponsSection(
+                            couponsState = couponsState,
                             onSaveCoupon = onSaveCoupon,
                             onDeleteCoupon = onDeleteCoupon
                         )
-                        2 -> AdminSettingsAndZonesTab(
+                        OwnerSection.MANAGERS -> OwnerManagersSection(
+                            managersState = managersState,
+                            onSaveManager = onSaveManager,
+                            onDeleteManager = onDeleteManager
+                        )
+                        OwnerSection.SALES -> OwnerSalesSection(
+                            ordersState = ordersState,
+                            usersState = usersState,
+                            ticketsState = ticketsState,
+                            onResolveTicket = onResolveTicket
+                        )
+                        OwnerSection.SETTINGS -> OwnerSettingsSection(
                             settings = settings,
                             zonesState = zonesState,
                             onSaveSettings = onSaveSettings,
                             onSaveZone = onSaveDeliveryZone,
                             onDeleteZone = onDeleteDeliveryZone
                         )
-                        3 -> AdminTeamAndCustomersTab(
-                            managersState = managersState,
-                            usersState = usersState,
-                            ticketsState = ticketsState,
-                            onSaveManager = onSaveManager,
-                            onDeleteManager = onDeleteManager,
-                            onResolveTicket = onResolveTicket
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AdminAnalyticsAndOrdersTab(
-    ordersState: UiState<List<Order>>,
-    foodItemsCount: Int,
-    onInitializeStarterCatalog: () -> Unit,
-    onUpdateOrderStatus: (String, OrderStatus) -> Unit
-) {
-    LazyColumn(
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        if (foodItemsCount == 0) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = TfcSoftRed),
-                    border = BorderStroke(1.dp, TfcCrimson.copy(alpha = 0.4f))
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Text("Database Menu Setup", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "Your Firestore menu is currently empty. Seed starter TFC categories, signature dishes, delivery zones, and coupon codes in one tap, or add them manually in Catalog.",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        Button(
-                            onClick = onInitializeStarterCatalog,
-                            colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson),
-                            modifier = Modifier
-                                .minimumInteractiveComponentSize()
-                                .testTag("init_starter_catalog_button")
-                        ) {
-                            Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Initialize TFC Starter Menu & Settings")
-                        }
-                    }
-                }
-            }
-        }
-
-        when (ordersState) {
-            is UiState.Loading -> item { LoadingView() }
-            is UiState.Error -> item { ErrorStateView(ordersState.message) }
-            is UiState.Success -> {
-                val orders = ordersState.data
-                val nonCancelled = orders.filter { OrderStatus.fromRaw(it.status) != OrderStatus.CANCELLED }
-                val totalRevenue = nonCancelled.sumOf { it.totalAmount }
-                val avgOrder = if (nonCancelled.isNotEmpty()) totalRevenue / nonCancelled.size else 0.0
-                val deliveryCount = orders.count { OrderType.fromRaw(it.orderType) == OrderType.DELIVERY }
-                val pickupCount = orders.count { OrderType.fromRaw(it.orderType) == OrderType.PICKUP }
-
-                item {
-                    Text("Sales & Order Analytics", style = MaterialTheme.typography.titleLarge)
-                }
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                        StatCard("Total Revenue", formatCurrency(totalRevenue), Modifier.weight(1f), highlight = true)
-                        StatCard("Total Orders", orders.size.toString(), Modifier.weight(1f))
-                    }
-                }
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                        StatCard("Avg Order Value", formatCurrency(avgOrder), Modifier.weight(1f))
-                        StatCard("Delivery / Pickup", "$deliveryCount / $pickupCount", Modifier.weight(1f))
-                    }
-                }
-                item {
-                    Text("All Orders (${orders.size})", style = MaterialTheme.typography.titleMedium)
-                }
-                if (orders.isEmpty()) {
-                    item {
-                        EmptyStateView("No Orders Yet", "Customer orders will stream here in real time.")
-                    }
-                } else {
-                    items(orders, key = { it.id }) { order ->
-                        var showStatusDialog by remember { mutableStateOf(false) }
-                        Card(
-                            shape = RoundedCornerShape(14.dp),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(14.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(order.orderNumber, style = MaterialTheme.typography.titleSmall)
-                                    OrderStatusBadge(order.status)
-                                }
-                                Text(
-                                    "${order.customerName} (${order.customerEmail.ifBlank { order.customerPhone }})",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        formatCurrency(order.totalAmount),
-                                        style = MaterialTheme.typography.titleSmall.copy(color = TfcCrimson, fontWeight = FontWeight.Bold)
-                                    )
-                                    OutlinedButton(onClick = { showStatusDialog = true }) {
-                                        Text("Override Status")
-                                    }
-                                }
-                            }
-                        }
-
-                        if (showStatusDialog) {
-                            AlertDialog(
-                                onDismissRequest = { showStatusDialog = false },
-                                title = { Text("Update ${order.orderNumber}") },
-                                text = {
-                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        OrderStatus.entries.forEach { st ->
-                                            OutlinedButton(
-                                                onClick = {
-                                                    onUpdateOrderStatus(order.id, st)
-                                                    showStatusDialog = false
-                                                },
-                                                modifier = Modifier.fillMaxWidth()
-                                            ) { Text(st.raw) }
-                                        }
-                                    }
-                                },
-                                confirmButton = {
-                                    TextButton(onClick = { showStatusDialog = false }) { Text("Close") }
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AdminCatalogTab(
-    categoriesState: UiState<List<FoodCategory>>,
-    foodItemsState: UiState<List<FoodItem>>,
-    couponsState: UiState<List<Coupon>>,
-    onSaveCategory: (FoodCategory, () -> Unit) -> Unit,
-    onDeleteCategory: (String) -> Unit,
-    onSaveFoodItem: (FoodItem, () -> Unit) -> Unit,
-    onDeleteFoodItem: (String) -> Unit,
-    onSaveCoupon: (Coupon, () -> Unit) -> Unit,
-    onDeleteCoupon: (String) -> Unit
-) {
-    var section by remember { mutableIntStateOf(0) } // 0=Items, 1=Categories, 2=Coupons
-    var editingFood by remember { mutableStateOf<FoodItem?>(null) }
-    var showFoodDialog by remember { mutableStateOf(false) }
-    var editingCategory by remember { mutableStateOf<FoodCategory?>(null) }
-    var showCategoryDialog by remember { mutableStateOf(false) }
-    var editingCoupon by remember { mutableStateOf<Coupon?>(null) }
-    var showCouponDialog by remember { mutableStateOf(false) }
-
-    val categories = (categoriesState as? UiState.Success)?.data ?: emptyList()
-    val items = (foodItemsState as? UiState.Success)?.data ?: emptyList()
-    val coupons = (couponsState as? UiState.Success)?.data ?: emptyList()
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilterChip(selected = section == 0, onClick = { section = 0 }, label = { Text("Items (${items.size})") })
-            FilterChip(selected = section == 1, onClick = { section = 1 }, label = { Text("Categories (${categories.size})") })
-            FilterChip(selected = section == 2, onClick = { section = 2 }, label = { Text("Coupons (${coupons.size})") })
-        }
-
-        LazyColumn(
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            when (section) {
-                0 -> {
-                    item {
-                        Button(
-                            onClick = { editingFood = null; showFoodDialog = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson),
-                            modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize()
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = null)
-                            Spacer(Modifier.width(6.dp))
-                            Text("Add Food Product")
-                        }
-                    }
-                    items(items, key = { it.id }) { item ->
-                        Card(border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(item.name, style = MaterialTheme.typography.titleSmall)
-                                    Text(
-                                        "${item.categoryName} • ${formatCurrency(item.effectivePrice)} • ${if (item.available) "Active" else "Out of Stock"}",
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                }
-                                Row {
-                                    IconButton(onClick = { editingFood = item; showFoodDialog = true }) {
-                                        Icon(Icons.Default.Edit, contentDescription = "Edit")
-                                    }
-                                    IconButton(onClick = { onDeleteFoodItem(item.id) }) {
-                                        Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", tint = TfcCrimson)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                1 -> {
-                    item {
-                        Button(
-                            onClick = { editingCategory = null; showCategoryDialog = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson),
-                            modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize()
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = null)
-                            Spacer(Modifier.width(6.dp))
-                            Text("Add Food Category")
-                        }
-                    }
-                    items(categories, key = { it.id }) { cat ->
-                        Card(border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(cat.name, style = MaterialTheme.typography.titleSmall)
-                                    Text("Order: ${cat.sortOrder} • ${if (cat.active) "Active" else "Hidden"}", style = MaterialTheme.typography.bodySmall)
-                                }
-                                Row {
-                                    IconButton(onClick = { editingCategory = cat; showCategoryDialog = true }) {
-                                        Icon(Icons.Default.Edit, contentDescription = "Edit")
-                                    }
-                                    IconButton(onClick = { onDeleteCategory(cat.id) }) {
-                                        Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", tint = TfcCrimson)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                2 -> {
-                    item {
-                        Button(
-                            onClick = { editingCoupon = null; showCouponDialog = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson),
-                            modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize()
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = null)
-                            Spacer(Modifier.width(6.dp))
-                            Text("Add Coupon / Offer")
-                        }
-                    }
-                    items(coupons, key = { it.id }) { coupon ->
-                        Card(border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text("${coupon.code} — ${coupon.title}", style = MaterialTheme.typography.titleSmall)
-                                    Text(
-                                        "${coupon.discountType}: ${coupon.discountValue} • Min ${formatCurrency(coupon.minOrderAmount)}",
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                }
-                                Row {
-                                    IconButton(onClick = { editingCoupon = coupon; showCouponDialog = true }) {
-                                        Icon(Icons.Default.Edit, contentDescription = "Edit")
-                                    }
-                                    IconButton(onClick = { onDeleteCoupon(coupon.id) }) {
-                                        Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", tint = TfcCrimson)
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -544,471 +412,649 @@ private fun AdminCatalogTab(
             initial = editingFood,
             categories = categories,
             onDismiss = { showFoodDialog = false },
-            onSave = { onSaveFoodItem(it) { showFoodDialog = false } }
-        )
-    }
-
-    if (showCategoryDialog) {
-        var name by remember { mutableStateOf(editingCategory?.name ?: "") }
-        var desc by remember { mutableStateOf(editingCategory?.description ?: "") }
-        var sortText by remember { mutableStateOf((editingCategory?.sortOrder ?: 1L).toString()) }
-        var active by remember { mutableStateOf(editingCategory?.active ?: true) }
-        AlertDialog(
-            onDismissRequest = { showCategoryDialog = false },
-            title = { Text(if (editingCategory == null) "Add Category" else "Edit Category") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Category Name") })
-                    OutlinedTextField(value = desc, onValueChange = { desc = it }, label = { Text("Description") })
-                    OutlinedTextField(
-                        value = sortText,
-                        onValueChange = { sortText = it },
-                        label = { Text("Sort Order") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                    )
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text("Active")
-                        Switch(checked = active, onCheckedChange = { active = it })
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onSaveCategory(
-                            FoodCategory(
-                                id = editingCategory?.id ?: "",
-                                name = name.trim(),
-                                description = desc.trim(),
-                                sortOrder = sortText.toLongOrNull() ?: 1L,
-                                active = active
-                            )
-                        ) { showCategoryDialog = false }
-                    },
-                    enabled = name.isNotBlank(),
-                    colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson)
-                ) { Text("Save") }
-            },
-            dismissButton = { TextButton(onClick = { showCategoryDialog = false }) { Text("Cancel") } }
-        )
-    }
-
-    if (showCouponDialog) {
-        var code by remember { mutableStateOf(editingCoupon?.code ?: "") }
-        var title by remember { mutableStateOf(editingCoupon?.title ?: "") }
-        var desc by remember { mutableStateOf(editingCoupon?.description ?: "") }
-        var type by remember { mutableStateOf(DiscountType.fromRaw(editingCoupon?.discountType)) }
-        var valueText by remember { mutableStateOf((editingCoupon?.discountValue ?: 15.0).toString()) }
-        var minOrderText by remember { mutableStateOf((editingCoupon?.minOrderAmount ?: 10.0).toString()) }
-        var maxDiscText by remember { mutableStateOf((editingCoupon?.maxDiscount ?: 10.0).toString()) }
-        var active by remember { mutableStateOf(editingCoupon?.active ?: true) }
-        AlertDialog(
-            onDismissRequest = { showCouponDialog = false },
-            title = { Text(if (editingCoupon == null) "Add Coupon" else "Edit Coupon") },
-            text = {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = code, onValueChange = { code = it.uppercase() }, label = { Text("Code (e.g. TFC20)") })
-                    OutlinedTextField(value = title, onValueChange = { title = it }, label = { Text("Offer Title") })
-                    OutlinedTextField(value = desc, onValueChange = { desc = it }, label = { Text("Description") })
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(selected = type == DiscountType.PERCENT, onClick = { type = DiscountType.PERCENT }, label = { Text("Percent %") })
-                        FilterChip(selected = type == DiscountType.FLAT, onClick = { type = DiscountType.FLAT }, label = { Text("Flat $") })
-                    }
-                    OutlinedTextField(value = valueText, onValueChange = { valueText = it }, label = { Text("Discount Value") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
-                    OutlinedTextField(value = minOrderText, onValueChange = { minOrderText = it }, label = { Text("Min Order ($)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
-                    OutlinedTextField(value = maxDiscText, onValueChange = { maxDiscText = it }, label = { Text("Max Discount ($)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text("Active")
-                        Switch(checked = active, onCheckedChange = { active = it })
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onSaveCoupon(
-                            Coupon(
-                                id = editingCoupon?.id ?: "",
-                                code = code.trim(),
-                                title = title.trim(),
-                                description = desc.trim(),
-                                discountType = type.raw,
-                                discountValue = valueText.toDoubleOrNull() ?: 10.0,
-                                minOrderAmount = minOrderText.toDoubleOrNull() ?: 0.0,
-                                maxDiscount = maxDiscText.toDoubleOrNull() ?: 0.0,
-                                active = active
-                            )
-                        ) { showCouponDialog = false }
-                    },
-                    enabled = code.trim().length >= 2 && title.isNotBlank(),
-                    colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson)
-                ) { Text("Save") }
-            },
-            dismissButton = { TextButton(onClick = { showCouponDialog = false }) { Text("Cancel") } }
+            onSave = { item ->
+                onSaveFoodItem(item) { showFoodDialog = false }
+            }
         )
     }
 }
 
 @Composable
-private fun AdminSettingsAndZonesTab(
-    settings: RestaurantSettings,
-    zonesState: UiState<List<DeliveryZone>>,
-    onSaveSettings: (RestaurantSettings) -> Unit,
-    onSaveZone: (DeliveryZone, () -> Unit) -> Unit,
-    onDeleteZone: (String) -> Unit
+private fun OwnerDashboardHomeSection(
+    ordersState: UiState<List<Order>>,
+    foodItemsState: UiState<List<FoodItem>>,
+    categoriesCount: Int,
+    managersCount: Int,
+    hasNotificationPermission: Boolean,
+    onRequestNotificationPermission: () -> Unit,
+    onAddNewFoodClick: () -> Unit,
+    onInitializeStarterCatalog: () -> Unit,
+    onNavigateSection: (OwnerSection) -> Unit,
+    onUpdateOrderStatus: (String, OrderStatus, String?, String?) -> Unit,
+    onSilenceAlarm: () -> Unit
 ) {
-    var address by remember(settings) { mutableStateOf(settings.restaurantAddress) }
-    var pickupNotes by remember(settings) { mutableStateOf(settings.pickupInstructions) }
-    var hours by remember(settings) { mutableStateOf(settings.openingHours) }
-    var orderingOpen by remember(settings) { mutableStateOf(settings.orderingOpen) }
-    var minOrder by remember(settings) { mutableStateOf(settings.minimumOrderAmount.toString()) }
-    var baseFee by remember(settings) { mutableStateOf(settings.baseDeliveryFee.toString()) }
-    var pickupMins by remember(settings) { mutableStateOf(settings.estimatedPickupMinutes.toString()) }
-    var supportPhone by remember(settings) { mutableStateOf(settings.supportPhone) }
-    var supportEmail by remember(settings) { mutableStateOf(settings.supportEmail) }
-    var bannerTitle by remember(settings) { mutableStateOf(settings.activeBannerTitle) }
-    var bannerSub by remember(settings) { mutableStateOf(settings.activeBannerSubtitle) }
-
-    var showZoneDialog by remember { mutableStateOf(false) }
-    var editingZone by remember { mutableStateOf<DeliveryZone?>(null) }
-    val zones = (zonesState as? UiState.Success)?.data ?: emptyList()
+    val orders = (ordersState as? UiState.Success)?.data ?: emptyList()
+    val foodItems = (foodItemsState as? UiState.Success)?.data ?: emptyList()
+    val nonCancelled = orders.filter { OrderStatus.fromRaw(it.status) != OrderStatus.CANCELLED }
+    val totalRevenue = nonCancelled.sumOf { it.totalAmount }
+    val activeOrders = orders.count { !OrderStatus.fromRaw(it.status).isTerminal }
+    val newPendingOrders = orders.filter { OrderStatus.fromRaw(it.status) == OrderStatus.ORDER_PLACED }
+    var rejectingOrder by remember { mutableStateOf<Order?>(null) }
 
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
-            Text("Restaurant Controls & Settings", style = MaterialTheme.typography.titleLarge)
-        }
-        item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = TfcSoftRed),
-                border = BorderStroke(1.dp, TfcCrimson.copy(alpha = 0.4f))
+                colors = CardDefaults.cardColors(
+                    containerColor = if (hasNotificationPermission) Color(0xFFDCFCE7) else TfcSoftRed
+                ),
+                border = BorderStroke(
+                    1.dp,
+                    if (hasNotificationPermission) TfcSuccessGreen.copy(alpha = 0.45f) else TfcCrimson.copy(alpha = 0.45f)
+                )
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (hasNotificationPermission) Icons.Default.NotificationsActive else Icons.Default.NotificationsOff,
+                        contentDescription = null,
+                        tint = if (hasNotificationPermission) TfcSuccessGreen else TfcCrimson
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (hasNotificationPermission) {
+                                "Owner Live Order Alarm Active"
+                            } else {
+                                "Enable Notification Permission"
+                            },
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Text(
+                            text = if (hasNotificationPermission) {
+                                "Plays loud alarm & sends instant background notification for every new customer order."
+                            } else {
+                                "Grant notification permission so new TFC orders alert your phone even in background."
+                            },
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    if (!hasNotificationPermission) {
+                        Button(
+                            onClick = onRequestNotificationPermission,
+                            colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson),
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("grant_notifications_button")
+                        ) {
+                            Text("Enable")
+                        }
+                    }
+                }
+            }
+        }
+
+        if (newPendingOrders.isNotEmpty()) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Restaurant Ordering", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            if (orderingOpen) "Customers can place new orders" else "Ordering paused for customers",
-                            style = MaterialTheme.typography.bodySmall
+                    Text(
+                        text = "Incoming Orders Waiting (${newPendingOrders.size})",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            color = TfcCrimson,
+                            fontWeight = FontWeight.Bold
                         )
+                    )
+                    TextButton(onClick = { onNavigateSection(OwnerSection.ORDERS) }) {
+                        Text("View All", color = TfcCrimson)
                     }
-                    Switch(checked = orderingOpen, onCheckedChange = { orderingOpen = it })
                 }
             }
-        }
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(value = address, onValueChange = { address = it }, label = { Text("Restaurant Address") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = pickupNotes, onValueChange = { pickupNotes = it }, label = { Text("Pickup Instructions") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = hours, onValueChange = { hours = it }, label = { Text("Opening Hours") }, modifier = Modifier.fillMaxWidth())
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = minOrder, onValueChange = { minOrder = it }, label = { Text("Min Order ($)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.weight(1f))
-                    OutlinedTextField(value = baseFee, onValueChange = { baseFee = it }, label = { Text("Base Delivery ($)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.weight(1f))
-                }
-                OutlinedTextField(value = pickupMins, onValueChange = { pickupMins = it }, label = { Text("Pickup ETA (mins)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = supportPhone, onValueChange = { supportPhone = it }, label = { Text("Support Phone") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = supportEmail, onValueChange = { supportEmail = it }, label = { Text("Support Email") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = bannerTitle, onValueChange = { bannerTitle = it }, label = { Text("Home Banner Title") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = bannerSub, onValueChange = { bannerSub = it }, label = { Text("Home Banner Subtitle") }, modifier = Modifier.fillMaxWidth())
-
-                Button(
-                    onClick = {
-                        onSaveSettings(
-                            settings.copy(
-                                restaurantAddress = address,
-                                pickupInstructions = pickupNotes,
-                                openingHours = hours,
-                                orderingOpen = orderingOpen,
-                                minimumOrderAmount = minOrder.toDoubleOrNull() ?: settings.minimumOrderAmount,
-                                baseDeliveryFee = baseFee.toDoubleOrNull() ?: settings.baseDeliveryFee,
-                                estimatedPickupMinutes = pickupMins.toLongOrNull() ?: settings.estimatedPickupMinutes,
-                                supportPhone = supportPhone,
-                                supportEmail = supportEmail,
-                                activeBannerTitle = bannerTitle,
-                                activeBannerSubtitle = bannerSub
-                            )
-                        )
+            items(newPendingOrders.take(3), key = { "home_${it.id}" }) { order ->
+                OwnerOrderActionCard(
+                    order = order,
+                    onAccept = {
+                        onSilenceAlarm()
+                        onUpdateOrderStatus(order.id, OrderStatus.ACCEPTED, null, null)
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson),
-                    modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize()
-                ) { Text("Save Restaurant Settings") }
+                    onReject = {
+                        onSilenceAlarm()
+                        rejectingOrder = order
+                    },
+                    onAdvance = { next ->
+                        val payStatus = if (next == OrderStatus.DELIVERED) "Paid" else null
+                        onUpdateOrderStatus(order.id, next, null, payStatus)
+                    },
+                    onOverrideStatus = { status ->
+                        onUpdateOrderStatus(order.id, status, null, if (status == OrderStatus.DELIVERED) "Paid" else null)
+                    }
+                )
             }
         }
 
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            Button(
+                onClick = onAddNewFoodClick,
+                colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(58.dp)
+                    .minimumInteractiveComponentSize()
+                    .testTag("owner_add_new_food_cta")
             ) {
-                Text("Delivery Zones (${zones.size})", style = MaterialTheme.typography.titleMedium)
-                Button(
-                    onClick = { editingZone = null; showZoneDialog = true },
-                    colors = ButtonDefaults.buttonColors(containerColor = TfcJetBlack)
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "+ ADD NEW FOOD",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        color = TfcPureWhite,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                )
+            }
+        }
+
+        if (foodItems.isEmpty()) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = TfcSoftRed),
+                    border = BorderStroke(1.dp, TfcCrimson.copy(alpha = 0.4f))
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Add Zone")
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text("Quick Starter Catalog", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Seed starter TFC Indian Rupees (₹) categories, signature buckets & burgers, delivery zones, and TFC20 coupon in one tap, or add dishes manually above.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Button(
+                            onClick = onInitializeStarterCatalog,
+                            colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson),
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("init_starter_catalog_button")
+                        ) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Initialize TFC Starter Menu (₹)")
+                        }
+                    }
                 }
             }
         }
 
-        items(zones, key = { it.id }) { zone ->
-            Card(border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(zone.name, style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            "Fee ${formatCurrency(zone.fee)} • ${zone.estimatedMinutes} mins • Min ${formatCurrency(zone.minOrderAmount)}",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                    Row {
-                        IconButton(onClick = { editingZone = zone; showZoneDialog = true }) {
-                            Icon(Icons.Default.Edit, contentDescription = "Edit zone")
-                        }
-                        IconButton(onClick = { onDeleteZone(zone.id) }) {
-                            Icon(Icons.Default.DeleteOutline, contentDescription = "Delete zone", tint = TfcCrimson)
-                        }
-                    }
-                }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                StatCard("Total Revenue", formatCurrency(totalRevenue), Modifier.weight(1f), highlight = true)
+                StatCard("Active Orders", activeOrders.toString(), Modifier.weight(1f))
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                StatCard("Menu Items", foodItems.size.toString(), Modifier.weight(1f))
+                StatCard("Categories / Team", "$categoriesCount / $managersCount", Modifier.weight(1f))
+            }
+        }
+
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = { onNavigateSection(OwnerSection.FOOD_MENU) },
+                    modifier = Modifier.weight(1f).minimumInteractiveComponentSize()
+                ) { Text("Manage Menu") }
+                OutlinedButton(
+                    onClick = { onNavigateSection(OwnerSection.MANAGERS) },
+                    modifier = Modifier.weight(1f).minimumInteractiveComponentSize()
+                ) { Text("Manage Staff") }
             }
         }
     }
 
-    if (showZoneDialog) {
-        var name by remember { mutableStateOf(editingZone?.name ?: "") }
-        var fee by remember { mutableStateOf((editingZone?.fee ?: 2.99).toString()) }
-        var eta by remember { mutableStateOf((editingZone?.estimatedMinutes ?: 30L).toString()) }
-        var minOrd by remember { mutableStateOf((editingZone?.minOrderAmount ?: 10.0).toString()) }
-        var active by remember { mutableStateOf(editingZone?.active ?: true) }
-        AlertDialog(
-            onDismissRequest = { showZoneDialog = false },
-            title = { Text(if (editingZone == null) "Add Delivery Zone" else "Edit Delivery Zone") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Zone Name") })
-                    OutlinedTextField(value = fee, onValueChange = { fee = it }, label = { Text("Delivery Fee ($)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
-                    OutlinedTextField(value = eta, onValueChange = { eta = it }, label = { Text("Estimated Minutes") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-                    OutlinedTextField(value = minOrd, onValueChange = { minOrd = it }, label = { Text("Min Order ($)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text("Active")
-                        Switch(checked = active, onCheckedChange = { active = it })
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onSaveZone(
-                            DeliveryZone(
-                                id = editingZone?.id ?: "",
-                                name = name.trim(),
-                                fee = fee.toDoubleOrNull() ?: 0.0,
-                                estimatedMinutes = eta.toLongOrNull() ?: 30L,
-                                minOrderAmount = minOrd.toDoubleOrNull() ?: 0.0,
-                                active = active
-                            )
-                        ) { showZoneDialog = false }
-                    },
-                    enabled = name.isNotBlank(),
-                    colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson)
-                ) { Text("Save") }
-            },
-            dismissButton = { TextButton(onClick = { showZoneDialog = false }) { Text("Cancel") } }
+    rejectingOrder?.let { target ->
+        RejectOrderReasonDialog(
+            orderNumber = target.orderNumber,
+            onDismiss = { rejectingOrder = null },
+            onConfirmReject = { reason ->
+                onUpdateOrderStatus(target.id, OrderStatus.CANCELLED, reason, null)
+                rejectingOrder = null
+            }
         )
     }
 }
 
 @Composable
-private fun AdminTeamAndCustomersTab(
-    managersState: UiState<List<ManagerAccount>>,
-    usersState: UiState<List<UserProfile>>,
-    ticketsState: UiState<List<SupportTicket>>,
-    onSaveManager: (ManagerAccount, Boolean, () -> Unit) -> Unit,
-    onDeleteManager: (String) -> Unit,
-    onResolveTicket: (String, String) -> Unit
+private fun OwnerOrdersSection(
+    ordersState: UiState<List<Order>>,
+    onUpdateOrderStatus: (String, OrderStatus, String?, String?) -> Unit,
+    onSilenceAlarm: () -> Unit
 ) {
-    var showManagerDialog by remember { mutableStateOf(false) }
-    var editingManager by remember { mutableStateOf<ManagerAccount?>(null) }
+    var showCompleted by remember { mutableStateOf(false) }
+    var rejectingOrder by remember { mutableStateOf<Order?>(null) }
 
-    val managers = (managersState as? UiState.Success)?.data ?: emptyList()
-    val customers = (usersState as? UiState.Success)?.data ?: emptyList()
-    val tickets = (ticketsState as? UiState.Success)?.data ?: emptyList()
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilterChip(
+                selected = !showCompleted,
+                onClick = { showCompleted = false },
+                label = { Text("New & Active") }
+            )
+            FilterChip(
+                selected = showCompleted,
+                onClick = { showCompleted = true },
+                label = { Text("Completed & Cancelled") }
+            )
+        }
 
-    LazyColumn(
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        when (ordersState) {
+            is UiState.Loading -> LoadingView()
+            is UiState.Error -> ErrorStateView(ordersState.message)
+            is UiState.Success -> {
+                val filtered = ordersState.data.filter { order ->
+                    val terminal = OrderStatus.fromRaw(order.status).isTerminal
+                    if (showCompleted) terminal else !terminal
+                }
+                if (filtered.isEmpty()) {
+                    EmptyStateView(
+                        title = if (showCompleted) "No Completed Orders" else "No Incoming Orders",
+                        subtitle = "Customer orders save to Firestore and stream here in real time."
+                    )
+                } else {
+                    LazyColumn(
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        item {
+                            Text(
+                                text = if (showCompleted) "Completed & Cancelled (${filtered.size})" else "Incoming & Active Orders (${filtered.size})",
+                                style = MaterialTheme.typography.titleLarge
+                            )
+                        }
+                        items(filtered, key = { it.id }) { order ->
+                            OwnerOrderActionCard(
+                                order = order,
+                                onAccept = {
+                                    onSilenceAlarm()
+                                    onUpdateOrderStatus(order.id, OrderStatus.ACCEPTED, null, null)
+                                },
+                                onReject = {
+                                    onSilenceAlarm()
+                                    rejectingOrder = order
+                                },
+                                onAdvance = { next ->
+                                    val payStatus = if (next == OrderStatus.DELIVERED) "Paid" else null
+                                    onUpdateOrderStatus(order.id, next, null, payStatus)
+                                },
+                                onOverrideStatus = { st ->
+                                    val payStatus = if (st == OrderStatus.DELIVERED) "Paid" else null
+                                    onUpdateOrderStatus(order.id, st, null, payStatus)
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    rejectingOrder?.let { target ->
+        RejectOrderReasonDialog(
+            orderNumber = target.orderNumber,
+            onDismiss = { rejectingOrder = null },
+            onConfirmReject = { reason ->
+                onUpdateOrderStatus(target.id, OrderStatus.CANCELLED, reason, null)
+                rejectingOrder = null
+            }
+        )
+    }
+}
+
+@Composable
+private fun OwnerOrderActionCard(
+    order: Order,
+    onAccept: () -> Unit,
+    onReject: () -> Unit,
+    onAdvance: (OrderStatus) -> Unit,
+    onOverrideStatus: (OrderStatus) -> Unit
+) {
+    var showStatusDialog by remember { mutableStateOf(false) }
+    val status = OrderStatus.fromRaw(order.status)
+    val isPickup = OrderType.fromRaw(order.orderType) == OrderType.PICKUP
+    val nextStatus = when (status) {
+        OrderStatus.ACCEPTED -> OrderStatus.PREPARING
+        OrderStatus.PREPARING -> OrderStatus.READY
+        OrderStatus.READY -> if (isPickup) OrderStatus.DELIVERED else OrderStatus.OUT_FOR_DELIVERY
+        OrderStatus.OUT_FOR_DELIVERY -> OrderStatus.DELIVERED
+        else -> null
+    }
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(
+            if (status == OrderStatus.ORDER_PLACED) 1.5.dp else 1.dp,
+            if (status == OrderStatus.ORDER_PLACED) TfcCrimson else MaterialTheme.colorScheme.outline
+        ),
+        colors = CardDefaults.cardColors(
+            containerColor = if (status == OrderStatus.ORDER_PLACED) TfcSoftRed.copy(alpha = 0.35f) else MaterialTheme.colorScheme.surface
+        )
     ) {
-        item {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Managers (${managers.size})", style = MaterialTheme.typography.titleLarge)
-                Button(
-                    onClick = { editingManager = null; showManagerDialog = true },
-                    colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson)
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Add Manager")
+                Column {
+                    Text(order.orderNumber, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = "${order.customerName} • ${if (isPickup) "SELF PICKUP" else "HOME DELIVERY"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
+                OrderStatusBadge(order.status)
             }
-        }
-        if (managers.isEmpty()) {
-            item {
-                Text(
-                    "No managers added yet. Ask a staff member to copy their UID from Profile and add them here.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        } else {
-            items(managers, key = { it.id }) { mgr ->
-                Card(border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(mgr.name, style = MaterialTheme.typography.titleSmall)
-                            Text("${mgr.email.ifBlank { mgr.phone }} • ${if (mgr.active) "Active" else "Suspended"}", style = MaterialTheme.typography.bodySmall)
+
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (order.customerPhone.isNotBlank() || order.customerEmail.isNotBlank()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(Icons.Default.Phone, contentDescription = null, tint = TfcCrimson, modifier = Modifier.size(14.dp))
                             Text(
-                                "Perms: ${listOfNotNull(if (mgr.canManageOrders) "Orders" else null, if (mgr.canManageMenu) "Menu" else null, if (mgr.canViewSales) "Sales" else null).joinToString(", ").ifBlank { "None" }}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TfcCrimson
+                                text = listOfNotNull(
+                                    order.customerPhone.takeIf { it.isNotBlank() },
+                                    order.customerEmail.takeIf { it.isNotBlank() }
+                                ).joinToString(" • "),
+                                style = MaterialTheme.typography.labelSmall
                             )
                         }
-                        Row {
-                            IconButton(onClick = { editingManager = mgr; showManagerDialog = true }) {
-                                Icon(Icons.Default.Edit, contentDescription = "Edit manager")
-                            }
-                            IconButton(onClick = { onDeleteManager(mgr.userId) }) {
-                                Icon(Icons.Default.DeleteOutline, contentDescription = "Remove manager", tint = TfcCrimson)
-                            }
+                    }
+                    if (!order.deliveryAddress.isNullOrBlank()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(Icons.Default.LocationOn, contentDescription = null, tint = TfcCrimson, modifier = Modifier.size(14.dp))
+                            Text(
+                                text = buildString {
+                                    append(order.deliveryAddress)
+                                    if (!order.landmark.isNullOrBlank()) append(" (${order.landmark})")
+                                },
+                                style = MaterialTheme.typography.labelSmall
+                            )
                         }
                     }
                 }
             }
-        }
 
-        item {
-            Text("Registered Customers (${customers.size})", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 8.dp))
-        }
-        items(customers, key = { it.id }) { user ->
-            Card(border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
-                Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-                    Text(user.displayName, style = MaterialTheme.typography.titleSmall)
-                    Text(user.email.ifBlank { user.phone }, style = MaterialTheme.typography.bodySmall)
-                    Text("UID: ${user.userId}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            HorizontalDivider()
+
+            order.items.forEach { item ->
+                val extra = listOfNotNull(
+                    item.variantName.takeIf { it.isNotBlank() },
+                    item.addonsSummary.takeIf { it.isNotBlank() }?.let { "+ $it" }
+                ).joinToString(" • ")
+                Text(
+                    text = "• ${item.quantity}x ${item.name}" + if (extra.isNotBlank()) " [$extra]" else "",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+
+            if (!order.cookingInstructions.isNullOrBlank()) {
+                Text(
+                    text = "Cooking Note: ${order.cookingInstructions}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TfcCrimson
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Total: ${formatCurrency(order.totalAmount)} • ${order.paymentMethod}",
+                    style = MaterialTheme.typography.titleSmall.copy(color = TfcJetBlack, fontWeight = FontWeight.Bold)
+                )
+                TextButton(onClick = { showStatusDialog = true }) {
+                    Text("Change Status", color = TfcCrimson)
                 }
             }
-        }
 
-        if (tickets.isNotEmpty()) {
-            item {
-                Text("Customer Support Tickets (${tickets.size})", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 8.dp))
-            }
-            items(tickets, key = { it.id }) { ticket ->
-                Card(border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+            if (status == OrderStatus.ORDER_PLACED) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onReject,
+                        border = BorderStroke(1.dp, TfcCrimson),
+                        modifier = Modifier
+                            .weight(1f)
+                            .minimumInteractiveComponentSize()
+                            .testTag("owner_reject_order_${order.id}")
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(ticket.subject, style = MaterialTheme.typography.titleSmall)
-                            Text(ticket.message, style = MaterialTheme.typography.bodySmall)
-                            Text("${ticket.userEmail} • ${ticket.status}", style = MaterialTheme.typography.labelSmall, color = TfcCrimson)
-                        }
-                        if (ticket.status == "Open") {
-                            OutlinedButton(onClick = { onResolveTicket(ticket.id, "Resolved") }) {
-                                Text("Resolve")
-                            }
-                        }
+                        Icon(Icons.Default.Close, contentDescription = null, tint = TfcCrimson, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Reject", color = TfcCrimson)
                     }
+                    Button(
+                        onClick = onAccept,
+                        colors = ButtonDefaults.buttonColors(containerColor = TfcSuccessGreen),
+                        modifier = Modifier
+                            .weight(1f)
+                            .minimumInteractiveComponentSize()
+                            .testTag("owner_accept_order_${order.id}")
+                    ) {
+                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Accept")
+                    }
+                }
+            } else if (nextStatus != null) {
+                Button(
+                    onClick = { onAdvance(nextStatus) },
+                    colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .minimumInteractiveComponentSize()
+                ) {
+                    Text("Mark as ${nextStatus.raw}")
                 }
             }
         }
     }
 
-    if (showManagerDialog) {
-        val isEdit = editingManager != null
-        var uid by remember { mutableStateOf(editingManager?.userId ?: "") }
-        var name by remember { mutableStateOf(editingManager?.name ?: "") }
-        var email by remember { mutableStateOf(editingManager?.email ?: "") }
-        var phone by remember { mutableStateOf(editingManager?.phone ?: "") }
-        var active by remember { mutableStateOf(editingManager?.active ?: true) }
-        var canOrders by remember { mutableStateOf(editingManager?.canManageOrders ?: true) }
-        var canMenu by remember { mutableStateOf(editingManager?.canManageMenu ?: true) }
-        var canSales by remember { mutableStateOf(editingManager?.canViewSales ?: true) }
-
+    if (showStatusDialog) {
         AlertDialog(
-            onDismissRequest = { showManagerDialog = false },
-            title = { Text(if (isEdit) "Edit Manager" else "Add Manager") },
+            onDismissRequest = { showStatusDialog = false },
+            title = { Text("Update ${order.orderNumber}") },
             text = {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = uid,
-                        onValueChange = { uid = it },
-                        enabled = !isEdit,
-                        label = { Text("Firebase User ID (UID)") }
-                    )
-                    OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Manager Name") })
-                    OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Email") })
-                    OutlinedTextField(value = phone, onValueChange = { phone = it }, label = { Text("Phone") })
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text("Account Active")
-                        Switch(checked = active, onCheckedChange = { active = it })
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text("Manage Orders")
-                        Switch(checked = canOrders, onCheckedChange = { canOrders = it })
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text("Manage Menu Items")
-                        Switch(checked = canMenu, onCheckedChange = { canMenu = it })
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text("View Daily Sales")
-                        Switch(checked = canSales, onCheckedChange = { canSales = it })
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OrderStatus.entries.forEach { st ->
+                        OutlinedButton(
+                            onClick = {
+                                onOverrideStatus(st)
+                                showStatusDialog = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text(st.raw) }
                     }
                 }
             },
             confirmButton = {
-                Button(
-                    onClick = {
-                        onSaveManager(
-                            ManagerAccount(
-                                userId = uid.trim(),
-                                name = name.trim(),
-                                email = email.trim(),
-                                phone = phone.trim(),
-                                active = active,
-                                canManageOrders = canOrders,
-                                canManageMenu = canMenu,
-                                canViewSales = canSales
-                            ),
-                            isEdit
-                        ) { showManagerDialog = false }
-                    },
-                    enabled = uid.isNotBlank() && name.isNotBlank(),
-                    colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson)
-                ) { Text("Save Manager") }
-            },
-            dismissButton = { TextButton(onClick = { showManagerDialog = false }) { Text("Cancel") } }
+                TextButton(onClick = { showStatusDialog = false }) { Text("Close") }
+            }
         )
+    }
+}
+
+@Composable
+private fun RejectOrderReasonDialog(
+    orderNumber: String,
+    onDismiss: () -> Unit,
+    onConfirmReject: (String) -> Unit
+) {
+    var reason by remember(orderNumber) { mutableStateOf("Kitchen at capacity") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Reject $orderNumber") },
+        text = {
+            OutlinedTextField(
+                value = reason,
+                onValueChange = { reason = it },
+                label = { Text("Rejection Reason") },
+                singleLine = false,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirmReject(reason.ifBlank { "Order rejected by restaurant" }) },
+                colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson)
+            ) {
+                Text("Reject Order")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
+private fun OwnerFoodMenuSection(
+    foodItemsState: UiState<List<FoodItem>>,
+    onAddNewFood: () -> Unit,
+    onEditFood: (FoodItem) -> Unit,
+    onToggleStock: (String, Boolean) -> Unit,
+    onDeleteFood: (String) -> Unit
+) {
+    when (foodItemsState) {
+        is UiState.Loading -> LoadingView()
+        is UiState.Error -> ErrorStateView(foodItemsState.message)
+        is UiState.Success -> {
+            val items = foodItemsState.data
+            LazyColumn(
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                item {
+                    Button(
+                        onClick = onAddNewFood,
+                        colors = ButtonDefaults.buttonColors(containerColor = TfcCrimson),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(54.dp)
+                            .minimumInteractiveComponentSize()
+                            .testTag("menu_add_new_food_button")
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "+ ADD NEW FOOD",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold)
+                        )
+                    }
+                }
+                if (items.isEmpty()) {
+                    item {
+                        EmptyStateView(
+                            title = "Your Food Menu is Empty",
+                            subtitle = "Tap + ADD NEW FOOD above to add unlimited dishes with photos, ₹ prices, variants, and add-ons."
+                        )
+                    }
+                } else {
+                    items(items, key = { it.effectiveId }) { item ->
+                        Card(border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                FoodPhoto(
+                                    imageUrl = item.imageUrl,
+                                    contentDescription = item.name,
+                                    modifier = Modifier
+                                        .size(60.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                )
+                                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        VegTypeBadge(item.foodType)
+                                        Text(item.name, style = MaterialTheme.typography.titleSmall)
+                                    }
+                                    Text(
+                                        "${item.effectiveCategory} • ${formatCurrency(item.effectivePrice)} • ${if (item.isAvailable) "In Stock" else "Out of Stock"}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (item.isAvailable) TfcSuccessGreen else TfcCrimson
+                                    )
+                                    val meta = buildList {
+                                        if (item.isPopular) add("Popular")
+                                        if (item.variants.isNotEmpty()) add("${item.variants.size} variants")
+                                        if (item.addons.isNotEmpty()) add("${item.addons.size} add-ons")
+                                    }.joinToString(" • ")
+                                    if (meta.isNotBlank()) {
+                                        Text(meta, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Switch(
+                                        checked = item.isAvailable,
+                                        onCheckedChange = { onToggleStock(item.effectiveId, it) }
+                                    )
+                                    Row {
+                                        IconButton(onClick = { onEditFood(item) }) {
+                                            Icon(Icons.Default.Edit, contentDescription = "Edit")
+                                        }
+                                        IconButton(onClick = { onDeleteFood(item.effectiveId) }) {
+                                            Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", tint = TfcCrimson)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
